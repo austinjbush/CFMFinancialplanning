@@ -123,6 +123,15 @@ const PhysicianFinancialPlanner = () => {
   const [activeTab, setActiveTab] = useState(0);
   const [detailedChart, setDetailedChart] = useState(false); // Toggle between simple net worth and detailed account breakdown
   const [showMonteCarlo, setShowMonteCarlo] = useState(false); // Toggle Monte Carlo fan chart overlay
+  const [chartFullscreen, setChartFullscreen] = useState(false); // Fullscreen chart overlay
+
+  // Escape key closes fullscreen chart
+  useEffect(() => {
+    if (!chartFullscreen) return;
+    const handler = (e) => { if (e.key === 'Escape') setChartFullscreen(false); };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [chartFullscreen]);
   const [includeSpouse, setIncludeSpouse] = useState(false); // Toggle spouse/partner income and accounts
   const [showDisclaimer, setShowDisclaimer] = useState(() => {
     try { return !localStorage.getItem('physician-fp-disclaimer-accepted'); } catch { return true; }
@@ -3062,7 +3071,7 @@ const PhysicianFinancialPlanner = () => {
           </div>
 
           {/* Net Worth Chart */}
-          <div className="bg-white border border-gray-200 rounded-lg p-3 shadow-lg">
+          <div className={chartFullscreen ? '' : 'bg-white border border-gray-200 rounded-lg p-3 shadow-lg'} style={chartFullscreen ? { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 9999, backgroundColor: '#fff', padding: '16px 24px', display: 'flex', flexDirection: 'column', overflow: 'auto' } : {}}>
             {netWorthProjection.shortfallAge && (
               <div className="bg-red-100 border border-red-300 rounded px-3 py-1.5 mb-1 flex items-center justify-between">
                 <span className="text-xs font-bold text-red-800">
@@ -3075,6 +3084,13 @@ const PhysicianFinancialPlanner = () => {
                 {showMonteCarlo ? 'Monte Carlo Simulation — Net Worth Percentile Bands' : detailedChart ? 'Account Breakdown & Withdrawal Sequence' : savedScenario ? 'Net Worth Projection — Comparing to Scenario A' : 'Net Worth Projection'} (Age {currentAge} to 90)
               </h3>
               <div className="flex items-center space-x-2">
+                <button
+                  onClick={() => setChartFullscreen((v) => !v)}
+                  className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 py-1 rounded transition font-medium"
+                  title={chartFullscreen ? 'Exit fullscreen (Esc)' : 'Expand chart to fullscreen'}
+                >
+                  {chartFullscreen ? '✕ Exit' : '⛶ Expand'}
+                </button>
                 {savedScenario ? (
                   <button
                     onClick={() => setSavedScenario(null)}
@@ -3106,7 +3122,7 @@ const PhysicianFinancialPlanner = () => {
                 )}
               </div>
             </div>
-            <ResponsiveContainer width="100%" height={showMonteCarlo ? 260 : detailedChart ? 260 : 200}>
+            <ResponsiveContainer width="100%" height={chartFullscreen ? '100%' : (showMonteCarlo ? 260 : detailedChart ? 260 : 200)} style={chartFullscreen ? { flex: 1, minHeight: 0 } : {}}>
               {showMonteCarlo ? (
                 <AreaChart data={monteCarloData.bands} margin={{ top: 5, right: 25, left: 0, bottom: 0 }}>
                   <defs>
