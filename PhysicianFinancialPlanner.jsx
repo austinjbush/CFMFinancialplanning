@@ -123,7 +123,7 @@ const PhysicianFinancialPlanner = () => {
   const [activeTab, setActiveTab] = useState(0);
   const [detailedChart, setDetailedChart] = useState(false); // Toggle between simple net worth and detailed account breakdown
   const [showMonteCarlo, setShowMonteCarlo] = useState(false); // Toggle Monte Carlo fan chart overlay
-  const [includeSpouse, setIncludeSpouse] = useState(true); // Toggle spouse/partner income and accounts
+  const [includeSpouse, setIncludeSpouse] = useState(false); // Toggle spouse/partner income and accounts
   const [showDisclaimer, setShowDisclaimer] = useState(() => {
     try { return !localStorage.getItem('physician-fp-disclaimer-accepted'); } catch { return true; }
   });
@@ -132,65 +132,65 @@ const PhysicianFinancialPlanner = () => {
   const [savedScenario, setSavedScenario] = useState(null);
 
   // Income & Compensation
-  const [baseSalary, setBaseSalary] = useState(381000);
-  const [trueUpPayments, setTrueUpPayments] = useState(103000);
-  const [filingStatus, setFilingStatus] = useState('MFJ');
-  const [spouseIncome, setSpouseIncome] = useState(120000);
+  const [baseSalary, setBaseSalary] = useState(0);
+  const [trueUpPayments, setTrueUpPayments] = useState(0);
+  const [filingStatus, setFilingStatus] = useState('Single');
+  const [spouseIncome, setSpouseIncome] = useState(0);
   const [useStandardDeduction, setUseStandardDeduction] = useState(true);
   const [itemizedDeduction, setItemizedDeduction] = useState(0);
 
   // Retirement Contributions - 401(k)
-  const [deferralPercentage, setDeferralPercentage] = useState(7);
+  const [deferralPercentage, setDeferralPercentage] = useState(0);
   const [preVsRothSplit, setPreVsRothSplit] = useState(100); // 100 = all pre-tax, 0 = all Roth
-  const [yearsOfService, setYearsOfService] = useState(5);
+  const [yearsOfService, setYearsOfService] = useState(0);
 
   // Retirement Contributions - 457(b)
-  const [deferral457bPercentage, setDeferral457bPercentage] = useState(7); // Percentage of base salary
+  const [deferral457bPercentage, setDeferral457bPercentage] = useState(0); // Percentage of base salary
 
   // Retirement Contributions - 401(a)
-  const [contribution401a, setContribution401a] = useState(21600);
+  const [contribution401a, setContribution401a] = useState(0);
 
   // Retirement Contributions - IRAs
   const [traditionalIraContrib, setTraditionalIraContrib] = useState(0);
-  const [rothIraContrib, setRothIraContrib] = useState(7500);
+  const [rothIraContrib, setRothIraContrib] = useState(0);
   const [spouseTraditionalIra, setSpouseTraditionalIra] = useState(0);
-  const [spouseRothIra, setSpouseRothIra] = useState(7500);
-  const [spouseEmployerDeferral, setSpouseEmployerDeferral] = useState(18000); // Spouse's own deferrals into employer plan (401k/403b/etc.)
-  const [spouseEmployerMatch, setSpouseEmployerMatch] = useState(6000); // Spouse's employer match contribution
+  const [spouseRothIra, setSpouseRothIra] = useState(0);
+  const [spouseEmployerDeferral, setSpouseEmployerDeferral] = useState(0); // Spouse's own deferrals into employer plan (401k/403b/etc.)
+  const [spouseEmployerMatch, setSpouseEmployerMatch] = useState(0); // Spouse's employer match contribution
   const [spousePreTaxSplit, setSpousePreTaxSplit] = useState(100); // 100 = all pre-tax, 0 = all Roth
 
   // Health Savings Account (HSA)
-  const [hsaContribution, setHsaContribution] = useState(8750);
-  const [hsaCoverage, setHsaCoverage] = useState('family'); // 'self' or 'family'
+  const [hsaContribution, setHsaContribution] = useState(0);
+  const [hsaCoverage, setHsaCoverage] = useState('self'); // 'self' or 'family'
 
   // Current Account Balances
-  const [balance401k, setBalance401k] = useState(309563);
-  const [balance457b, setBalance457b] = useState(10814);
-  const [balance401a, setBalance401a] = useState(28513);
+  const [balance401k, setBalance401k] = useState(0);
+  const [balance457b, setBalance457b] = useState(0);
+  const [balance401a, setBalance401a] = useState(0);
   const [balanceTraditionalIra, setBalanceTraditionalIra] = useState(0);
-  const [balanceRothIra, setBalanceRothIra] = useState(58925);
-  const [balanceHsa, setBalanceHsa] = useState(50144);
-  const [spousePreTaxBalance, setSpousePreTaxBalance] = useState(288934); // Spouse 401k + 457b + 403b
-  const [spouseRothBalance, setSpouseRothBalance] = useState(35077); // Spouse Roth IRA
-  const [taxableBrokerage, setTaxableBrokerage] = useState(86219);
-  const [savingsBalance, setSavingsBalance] = useState(40155);
+  const [balanceRothIra, setBalanceRothIra] = useState(0);
+  const [balanceHsa, setBalanceHsa] = useState(0);
+  const [spousePreTaxBalance, setSpousePreTaxBalance] = useState(0); // Spouse 401k + 457b + 403b
+  const [spouseRothBalance, setSpouseRothBalance] = useState(0); // Spouse Roth IRA
+  const [taxableBrokerage, setTaxableBrokerage] = useState(0);
+  const [savingsBalance, setSavingsBalance] = useState(0);
 
   // Household Budget & Debt
-  const [monthlySpending, setMonthlySpending] = useState(20000);
-  const [studentLoanBalance, setStudentLoanBalance] = useState(84000);
-  const [studentLoanRate, setStudentLoanRate] = useState(3.4);
-  const [studentLoanPayment, setStudentLoanPayment] = useState(2000);
-  const [mortgageBalance, setMortgageBalance] = useState(233000);
-  const [mortgageRate, setMortgageRate] = useState(3.35);
-  const [mortgagePayment, setMortgagePayment] = useState(1667);
+  const [monthlySpending, setMonthlySpending] = useState(0);
+  const [studentLoanBalance, setStudentLoanBalance] = useState(0);
+  const [studentLoanRate, setStudentLoanRate] = useState(5);
+  const [studentLoanPayment, setStudentLoanPayment] = useState(0);
+  const [mortgageBalance, setMortgageBalance] = useState(0);
+  const [mortgageRate, setMortgageRate] = useState(6);
+  const [mortgagePayment, setMortgagePayment] = useState(0);
   const [otherDebtBalance, setOtherDebtBalance] = useState(0);
   const [otherDebtRate, setOtherDebtRate] = useState(8);
   const [otherDebtPayment, setOtherDebtPayment] = useState(0);
-  const [monthlyTaxableInvestment, setMonthlyTaxableInvestment] = useState(1500); // Explicit taxable brokerage contributions
+  const [monthlyTaxableInvestment, setMonthlyTaxableInvestment] = useState(0); // Explicit taxable brokerage contributions
 
   // Other Assets & Settings
   const [equityAllocation, setEquityAllocation] = useState(90);
-  const [currentAge, setCurrentAge] = useState(34);
+  const [currentAge, setCurrentAge] = useState(35);
   const [retirementAge, setRetirementAge] = useState(65);
   const [spouseRetirementAge, setSpouseRetirementAge] = useState(65);
   const [retirementTaxRate, setRetirementTaxRate] = useState(22); // Estimated effective tax rate on pre-tax withdrawals in retirement
