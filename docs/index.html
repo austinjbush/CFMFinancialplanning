@@ -765,6 +765,14 @@ const PhysicianFinancialPlanner = () => {
     return Math.max(0, savings);
   }, [totalComp, effSpouseIncome, includeSpouse, taxCalculations, annualContributions, monthlySpending, studentLoanPayment, mortgagePayment, otherDebtPayment]);
 
+  // Auto-clamp taxable investment when surplus shrinks below current slider value
+  useEffect(() => {
+    const maxMonthly = Math.max(0, Math.floor(annualSavings / 12 / 100) * 100);
+    if (monthlyTaxableInvestment > maxMonthly) {
+      setMonthlyTaxableInvestment(maxMonthly);
+    }
+  }, [annualSavings]);
+
   // Net worth projection
   const netWorthProjection = useMemo(() => {
     const data = [];
@@ -2042,7 +2050,7 @@ const PhysicianFinancialPlanner = () => {
               type="range"
               min="0"
               max={hsaCoverage === 'family' ? (currentAge >= 55 ? IRS_HSA_FAMILY + IRS_HSA_CATCHUP : IRS_HSA_FAMILY) : (currentAge >= 55 ? IRS_HSA_SELF + IRS_HSA_CATCHUP : IRS_HSA_SELF)}
-              step="100"
+              step="50"
               value={hsaContribution}
               onChange={(e) => setHsaContribution(Number(e.target.value))}
               className="w-full"
@@ -2139,14 +2147,14 @@ const PhysicianFinancialPlanner = () => {
 
             {/* Spouse Employer Plan */}
             <div>
-              <h4 className="text-sm font-semibold text-gray-700 mb-3">Spouse Employer Plan (401k/403b/etc.)</h4>
+              <h4 className="text-sm font-semibold text-gray-700 mb-3">Spouse Employer Plan (401k/403b/457b)</h4>
               <div className="space-y-3">
                 <div>
                   <div className="flex items-center space-x-2 mb-1">
                     <label className="block text-sm font-medium text-gray-700">Employee Deferrals: {formatCurrency(spouseEmployerDeferral)}/yr</label>
-                    <InfoTip text="Spouse's own annual deferrals into their employer retirement plan (401k, 403b, etc.). This comes out of the spouse's paycheck. The 2026 IRS limit is $24,500 ($32,500 if age 50+). These deferrals stop when spouse retires." />
+                    <InfoTip text="Spouse's own annual deferrals into their employer retirement plan. If spouse has access to BOTH a 401(k)/403(b) AND a 457(b), combine both deferrals here — each has its own $24,500 limit ($49,000 combined). The 457(b) has a separate IRS limit from the 401(k)/403(b). If spouse only has one plan, use the single-plan limit. Catch-up: add $8,000/plan if age 50+ ($65,000 combined), or $11,250/plan if age 60-63. These deferrals stop when spouse retires." />
                   </div>
-                  <input type="range" min="0" max="35750" step="500" value={spouseEmployerDeferral} onChange={(e) => setSpouseEmployerDeferral(Number(e.target.value))} className="w-full" />
+                  <input type="range" min="0" max="65000" step="500" value={spouseEmployerDeferral} onChange={(e) => setSpouseEmployerDeferral(Number(e.target.value))} className="w-full" />
                 </div>
                 <div>
                   <div className="flex items-center space-x-2 mb-1">
@@ -2200,18 +2208,34 @@ const PhysicianFinancialPlanner = () => {
           <div>
             <div className="flex items-center space-x-2 mb-2">
               <label className="block text-sm font-medium text-gray-700">Monthly Investment: {formatCurrency(monthlyTaxableInvestment)}</label>
-              <InfoTip text="Amount you explicitly invest each month into taxable brokerage accounts (e.g., Vanguard, Fidelity, Schwab). Only this amount grows in the net worth projection — any unallocated cash beyond this is assumed spent on lifestyle. Taxable accounts grow slightly slower than tax-advantaged accounts due to annual tax drag from dividends and capital gains distributions." />
+              <InfoTip text="Amount you explicitly invest each month into taxable brokerage accounts (e.g., Vanguard, Fidelity, Schwab). Only this amount grows in the net worth projection — any unallocated cash beyond this is assumed spent on lifestyle. This slider is capped at your available monthly surplus after taxes, retirement contributions, spending, and debt payments." />
             </div>
-            <input
-              type="range"
-              min="0"
-              max="10000"
-              step="100"
-              value={monthlyTaxableInvestment}
-              onChange={(e) => setMonthlyTaxableInvestment(Number(e.target.value))}
-              className="w-full"
-            />
-            <p className="text-xs text-gray-500 mt-1">Annual: {formatCurrency(monthlyTaxableInvestment * 12)} | Remaining unallocated: {formatCurrency(annualSavings - monthlyTaxableInvestment * 12)}</p>
+            {(() => {
+              const maxMonthly = Math.max(0, Math.floor(annualSavings / 12 / 100) * 100);
+              const sliderMax = Math.max(maxMonthly, 100); // Minimum slider range of $100
+              const atCap = monthlyTaxableInvestment >= maxMonthly && maxMonthly > 0;
+              const overCap = monthlyTaxableInvestment > maxMonthly;
+              return (
+                <>
+                  <input
+                    type="range"
+                    min="0"
+                    max={sliderMax}
+                    step="100"
+                    value={Math.min(monthlyTaxableInvestment, sliderMax)}
+                    onChange={(e) => setMonthlyTaxableInvestment(Number(e.target.value))}
+                    className="w-full"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">Annual: {formatCurrency(monthlyTaxableInvestment * 12)} | Remaining unallocated: {formatCurrency(Math.max(0, annualSavings - monthlyTaxableInvestment * 12))}/yr</p>
+                  {overCap && (
+                    <p className="text-xs text-amber-600 mt-1 font-medium">Slider adjusted — your available surplus is {formatCurrency(maxMonthly)}/mo after taxes, retirement, spending, and debt.</p>
+                  )}
+                  {atCap && !overCap && (
+                    <p className="text-xs text-blue-600 mt-1 font-medium">You're investing your full available surplus. Any additional cash flow goes to lifestyle.</p>
+                  )}
+                </>
+              );
+            })()}
           </div>
         </div>
       </div>
