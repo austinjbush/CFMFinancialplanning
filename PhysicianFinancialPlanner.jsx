@@ -203,7 +203,8 @@ const PhysicianFinancialPlanner = () => {
   const [retirementAge, setRetirementAge] = useState(65);
   const [spouseRetirementAge, setSpouseRetirementAge] = useState(65);
   const [retirementTaxRate, setRetirementTaxRate] = useState(22); // Estimated effective tax rate on pre-tax withdrawals in retirement
-  const [inflationRate, setInflationRate] = useState(3.0); // Annual inflation assumption — applied to spending, NOT to income or IRS limits (conservative)
+  // All projections use REAL (inflation-adjusted) returns — values shown in today's dollars
+  // Inflation is baked into lower return rates rather than inflating income/spending separately
 
   // ── localStorage auto-save/restore ───────────────────────────────────
   const STORAGE_KEY = 'physician-financial-planner-state';
@@ -264,7 +265,7 @@ const PhysicianFinancialPlanner = () => {
       if (d.retirementAge !== undefined) setRetirementAge(d.retirementAge);
       if (d.spouseRetirementAge !== undefined) setSpouseRetirementAge(d.spouseRetirementAge);
       if (d.retirementTaxRate !== undefined) setRetirementTaxRate(d.retirementTaxRate);
-      if (d.inflationRate !== undefined) setInflationRate(d.inflationRate);
+      // inflationRate no longer used — real-return model (backward compat: silently ignore)
     } catch (e) {
       console.warn('[PhysicianFinancialPlanner] Failed to restore from localStorage:', e);
     }
@@ -288,7 +289,6 @@ const PhysicianFinancialPlanner = () => {
           studentLoanPayment, mortgageBalance, mortgageRate, mortgagePayment,
           otherDebtBalance, otherDebtRate, otherDebtPayment, monthlyTaxableInvestment,
           equityAllocation, currentAge, retirementAge, spouseRetirementAge, retirementTaxRate,
-          inflationRate,
         };
         localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
       } catch (e) {
@@ -306,7 +306,7 @@ const PhysicianFinancialPlanner = () => {
     savingsBalance, monthlySpending, studentLoanBalance, studentLoanRate,
     studentLoanPayment, mortgageBalance, mortgageRate, mortgagePayment,
     otherDebtBalance, otherDebtRate, otherDebtPayment, monthlyTaxableInvestment,
-    equityAllocation, currentAge, retirementAge, spouseRetirementAge, retirementTaxRate, inflationRate]);
+    equityAllocation, currentAge, retirementAge, spouseRetirementAge, retirementTaxRate]);
 
   // Derived total compensation
   const totalComp = baseSalary + trueUpPayments;
@@ -368,9 +368,12 @@ const PhysicianFinancialPlanner = () => {
   }, [iraMax]);
 
   // Calculate blended return
+  // Real (inflation-adjusted) returns: nominal minus ~3% long-term inflation
+  // All projections are in today's dollars — what you see is purchasing power
+  const ASSUMED_INFLATION = 0.03; // 3% — used only to derive real returns from nominal
   const blendedReturn = useMemo(() => {
-    const bondReturn = 0.045;
-    const equityReturn = 0.07;
+    const bondReturn = 0.015;   // 4.5% nominal − 3% inflation = 1.5% real
+    const equityReturn = 0.04;  // 7.0% nominal − 3% inflation = 4.0% real
     return (equityAllocation / 100) * equityReturn + ((100 - equityAllocation) / 100) * bondReturn;
   }, [equityAllocation]);
 
@@ -689,42 +692,30 @@ const PhysicianFinancialPlanner = () => {
       const taxDrag = 0.01;
       taxable *= (1 + blendedReturn - taxDrag);
       // Cash savings: emergency reserve earning HYSA rate, no additional contributions modeled
-      savings *= 1.03; // ~3% HYSA return, grows in all phases but drawn last
+      savings *= 1.00; // HYSA ~3% nominal ≈ 0% real return (matches inflation)
 
       const spouseIsRetired = age >= effSpouseRetirementAge;
 
       if (!isRetired) {
         // Accumulation phase with year-by-year cash flow modeling
-        // Step 1: Determine this year's income based on who's still working
-        // Income grows with inflation (cost-of-living adjustments only — no real raises)
-        const inflationFactor = Math.pow(1 + inflationRate / 100, age - currentAge);
-        const yearPhysicianIncome = totalComp * inflationFactor;
-        const yearSpouseIncome = spouseIsRetired ? 0 : effSpouseIncome * inflationFactor;
+        // Step 1: Determine this year's income (flat — real-dollar model, today's purchasing power)
+        const yearPhysicianIncome = totalComp;
+        const yearSpouseIncome = spouseIsRetired ? 0 : effSpouseIncome;
         const yearGrossIncome = yearPhysicianIncome + yearSpouseIncome;
 
-        // Step 2: Planned contributions
-        // Employee deferrals are capped at frozen IRS limits — stay at current-year values
-        // Employer contributions (match, non-elective, 401(a)) are %-based and scale with inflated comp
+        // Step 2: Planned contributions (all at current-year values — no inflation scaling)
         const yearSpouseTradIra = spouseIsRetired ? 0 : annualContributions.spouseTradIra;
         const yearSpouseRothIra = spouseIsRetired ? 0 : annualContributions.spouseRothIra;
         const yearSpouseEmpPreTax = spouseIsRetired ? 0 : annualContributions.spouseEmpPreTax;
         const yearSpouseEmpRoth = spouseIsRetired ? 0 : annualContributions.spouseEmpRoth;
         const yearSpouseEmpDeferral = yearSpouseEmpPreTax + yearSpouseEmpRoth;
-        const yearSpouseEmpMatch = spouseIsRetired ? 0 : annualContributions.spouseEmpMatch * inflationFactor;
+        const yearSpouseEmpMatch = spouseIsRetired ? 0 : annualContributions.spouseEmpMatch;
 
-        // Recalculate employer contributions on inflated comp (capped at frozen IRS limits)
-        const yearMatchableComp = Math.min(yearPhysicianIncome, IRS_COMP_LIMIT);
-        const yearEffDeferralRate = yearMatchableComp > 0 ? annualContributions.pre401k + annualContributions.roth401k : 0;
-        const yearMatchRate = yearMatchableComp > 0 ? Math.min((annualContributions.pre401k + annualContributions.roth401k) / yearMatchableComp, 0.03) : 0;
-        const yearMatch = yearMatchRate * yearMatchableComp;
-        const yearNonElective = yearMatchableComp * 0.03;
-        const yearUsed415c = (annualContributions.pre401k + annualContributions.roth401k) + yearMatch + yearNonElective;
-        const yearRaw401a = yearMatchableComp * 0.06;
-        const year401a = Math.max(0, Math.min(yearRaw401a, IRS_415C_LIMIT - yearUsed415c));
-        const employerContrib = yearMatch + yearNonElective;
+        // Employer contributions at current-year values (flat comp, flat IRS limits)
+        const employerContrib = employerMatch + nonElectiveContribution;
 
-        const plannedPreTaxDeductible = annualContributions.pre401k + annualContributions.total457b + year401a + annualContributions.hsa + yearSpouseEmpPreTax;
-        const plannedEmployeeContrib = annualContributions.pre401k + annualContributions.roth401k + annualContributions.total457b + year401a + annualContributions.tradIra + annualContributions.rothIra + yearSpouseTradIra + yearSpouseRothIra + annualContributions.hsa + yearSpouseEmpDeferral;
+        const plannedPreTaxDeductible = annualContributions.pre401k + annualContributions.total457b + contribution401a + annualContributions.hsa + yearSpouseEmpPreTax;
+        const plannedEmployeeContrib = annualContributions.pre401k + annualContributions.roth401k + annualContributions.total457b + contribution401a + annualContributions.tradIra + annualContributions.rothIra + yearSpouseTradIra + yearSpouseRothIra + annualContributions.hsa + yearSpouseEmpDeferral;
 
         // Step 3: Compute taxes WITHOUT pre-tax deductions first to get true baseline take-home
         const yearFica = calculateFicaTax(yearPhysicianIncome, yearSpouseIncome, filingStatus);
@@ -738,9 +729,8 @@ const PhysicianFinancialPlanner = () => {
         const baselineTotalTax = baselineFederalTax + yearFica + baselineNcTax + baselineNiit;
 
         // Step 4: Check affordability with zero contributions
-        // Both income and spending inflate at the same rate (COLA only — no real raises)
-        // IRS limits and tax brackets are frozen (conservative: bracket creep erodes take-home)
-        const yearSpending = (monthlySpending * 12) * inflationFactor;
+        // Real-dollar model: spending flat in today's dollars
+        const yearSpending = monthlySpending * 12;
         const yearDebtPayments = (sLoan > 0 ? studentLoanPayment * 12 : 0) + (mort > 0 ? mortgagePayment * 12 : 0) + (oDebt > 0 ? otherDebtPayment * 12 : 0);
         const yearMandatoryOutflows = yearSpending + yearDebtPayments;
         const yearTaxableInvestment = monthlyTaxableInvestment * 12;
@@ -796,7 +786,7 @@ const PhysicianFinancialPlanner = () => {
         acc401kPreTax += annualContributions.pre401k * sc + employerContrib; // employer always funds
         acc401kRoth += annualContributions.roth401k * sc;
         acc457b += annualContributions.total457b * sc;
-        acc401a += year401a * sc;
+        acc401a += contribution401a * sc;
         tradIra += (annualContributions.tradIra + yearSpouseTradIra) * sc;
         tradIraBasis += (annualContributions.tradIra + yearSpouseTradIra) * sc;
         rothIra += (annualContributions.rothIra + yearSpouseRothIra) * sc;
@@ -842,13 +832,15 @@ const PhysicianFinancialPlanner = () => {
           }
         }
 
-        // Debt reduction (simplified: interest accrues, payments reduce balance)
-        sLoan = Math.max(0, sLoan * (1 + studentLoanRate / 100) - studentLoanPayment * 12);
-        mort = Math.max(0, mort * (1 + mortgageRate / 100) - mortgagePayment * 12);
-        oDebt = Math.max(0, oDebt * (1 + otherDebtRate / 100) - otherDebtPayment * 12);
+        // Debt reduction — rates are nominal; in real terms, inflation erodes debt
+        // Real debt cost = nominal rate − ~3% inflation
+        const realDebtAdj = ASSUMED_INFLATION;
+        sLoan = Math.max(0, sLoan * (1 + Math.max(0, studentLoanRate / 100 - realDebtAdj)) - studentLoanPayment * 12);
+        mort = Math.max(0, mort * (1 + Math.max(0, mortgageRate / 100 - realDebtAdj)) - mortgagePayment * 12);
+        oDebt = Math.max(0, oDebt * (1 + Math.max(0, otherDebtRate / 100 - realDebtAdj)) - otherDebtPayment * 12);
       } else {
-        // Drawdown phase: spending inflated from current age through retirement and beyond
-        let remainingDraw = (monthlySpending * 12) * Math.pow(1 + inflationRate / 100, age - currentAge);
+        // Drawdown phase: spending flat (real dollars — today's purchasing power)
+        let remainingDraw = monthlySpending * 12;
 
         // Debt service in retirement — payments must come from drawn funds
         const yearDebtService =
@@ -857,10 +849,10 @@ const PhysicianFinancialPlanner = () => {
           (oDebt > 0 ? otherDebtPayment * 12 : 0);
         remainingDraw += yearDebtService;
 
-        // Amortize debts (interest accrues, payments reduce balance)
-        sLoan = Math.max(0, sLoan * (1 + studentLoanRate / 100) - studentLoanPayment * 12);
-        mort = Math.max(0, mort * (1 + mortgageRate / 100) - mortgagePayment * 12);
-        oDebt = Math.max(0, oDebt * (1 + otherDebtRate / 100) - otherDebtPayment * 12);
+        // Amortize debts (real rates = nominal − inflation)
+        sLoan = Math.max(0, sLoan * (1 + Math.max(0, studentLoanRate / 100 - ASSUMED_INFLATION)) - studentLoanPayment * 12);
+        mort = Math.max(0, mort * (1 + Math.max(0, mortgageRate / 100 - ASSUMED_INFLATION)) - mortgagePayment * 12);
+        oDebt = Math.max(0, oDebt * (1 + Math.max(0, otherDebtRate / 100 - ASSUMED_INFLATION)) - otherDebtPayment * 12);
 
         // Draw from accounts in priority order.
         // Key rules:
@@ -962,7 +954,7 @@ const PhysicianFinancialPlanner = () => {
     // Attach metadata to the array for easy access
     data.shortfallAge = shortfallAge;
     return data;
-  }, [currentAge, retirementAge, effSpouseRetirementAge, blendedReturn, balance401k, balance457b, balance401a, balanceTraditionalIra, balanceRothIra, balanceHsa, effSpousePreTaxBalance, effSpouseRothBalance, taxableBrokerage, savingsBalance, studentLoanBalance, studentLoanRate, studentLoanPayment, mortgageBalance, mortgageRate, mortgagePayment, otherDebtBalance, otherDebtRate, otherDebtPayment, monthlySpending, annualContributions, monthlyTaxableInvestment, retirementTaxRate, preVsRothSplit, totalComp, effSpouseIncome, effSpouseEmployerTotal, filingStatus, deduction, ncTaxDeduction, calculateFederalTax, calculateFicaTax, calculateNiit, estimateNetInvestmentIncome, includeSpouse, inflationRate]);
+  }, [currentAge, retirementAge, effSpouseRetirementAge, blendedReturn, balance401k, balance457b, balance401a, balanceTraditionalIra, balanceRothIra, balanceHsa, effSpousePreTaxBalance, effSpouseRothBalance, taxableBrokerage, savingsBalance, studentLoanBalance, studentLoanRate, studentLoanPayment, mortgageBalance, mortgageRate, mortgagePayment, otherDebtBalance, otherDebtRate, otherDebtPayment, monthlySpending, annualContributions, monthlyTaxableInvestment, retirementTaxRate, preVsRothSplit, totalComp, effSpouseIncome, effSpouseEmployerTotal, filingStatus, deduction, ncTaxDeduction, calculateFederalTax, calculateFicaTax, calculateNiit, estimateNetInvestmentIncome, includeSpouse, contribution401a, employerMatch, nonElectiveContribution]);
 
   // Retirement metrics
   const retirementMetrics = useMemo(() => {
@@ -1115,15 +1107,14 @@ const PhysicianFinancialPlanner = () => {
         spouseRoth *= (1 + clampedReturn);
         const taxDrag = 0.01;
         taxable *= (1 + clampedReturn - taxDrag);
-        sav *= 1.03;
+        sav *= 1.00; // HYSA ~0% real
 
         const spouseIsRetired = age >= effSpouseRetirementAge;
 
         if (!isRetired) {
           // ─── Accumulation phase (same logic as deterministic, but with random return) ───
-          const inflationFactor = Math.pow(1 + inflationRate / 100, age - currentAge);
-          const yearPhysicianIncome = totalComp * inflationFactor;
-          const yearSpouseIncome = spouseIsRetired ? 0 : effSpouseIncome * inflationFactor;
+          const yearPhysicianIncome = totalComp;
+          const yearSpouseIncome = spouseIsRetired ? 0 : effSpouseIncome;
           const yearGrossIncome = yearPhysicianIncome + yearSpouseIncome;
 
           const yearSpouseTradIra = spouseIsRetired ? 0 : annualContributions.spouseTradIra;
@@ -1131,20 +1122,13 @@ const PhysicianFinancialPlanner = () => {
           const yearSpouseEmpPreTax = spouseIsRetired ? 0 : annualContributions.spouseEmpPreTax;
           const yearSpouseEmpRoth = spouseIsRetired ? 0 : annualContributions.spouseEmpRoth;
           const yearSpouseEmpDeferral = yearSpouseEmpPreTax + yearSpouseEmpRoth;
-          const yearSpouseEmpMatch = spouseIsRetired ? 0 : annualContributions.spouseEmpMatch * inflationFactor;
+          const yearSpouseEmpMatch = spouseIsRetired ? 0 : annualContributions.spouseEmpMatch;
 
-          // Recalculate employer contributions on inflated comp
-          const yearMatchableComp = Math.min(yearPhysicianIncome, IRS_COMP_LIMIT);
-          const yearMatchRate = yearMatchableComp > 0 ? Math.min((annualContributions.pre401k + annualContributions.roth401k) / yearMatchableComp, 0.03) : 0;
-          const yearMatch = yearMatchRate * yearMatchableComp;
-          const yearNonElective = yearMatchableComp * 0.03;
-          const yearUsed415c = (annualContributions.pre401k + annualContributions.roth401k) + yearMatch + yearNonElective;
-          const yearRaw401a = yearMatchableComp * 0.06;
-          const year401a = Math.max(0, Math.min(yearRaw401a, IRS_415C_LIMIT - yearUsed415c));
-          const employerContrib = yearMatch + yearNonElective;
+          // Employer contributions at current-year flat values
+          const employerContrib = employerMatch + nonElectiveContribution;
 
-          const plannedPreTaxDeductible = annualContributions.pre401k + annualContributions.total457b + year401a + annualContributions.hsa + yearSpouseEmpPreTax;
-          const plannedEmployeeContrib = annualContributions.pre401k + annualContributions.roth401k + annualContributions.total457b + year401a + annualContributions.tradIra + annualContributions.rothIra + yearSpouseTradIra + yearSpouseRothIra + annualContributions.hsa + yearSpouseEmpDeferral;
+          const plannedPreTaxDeductible = annualContributions.pre401k + annualContributions.total457b + contribution401a + annualContributions.hsa + yearSpouseEmpPreTax;
+          const plannedEmployeeContrib = annualContributions.pre401k + annualContributions.roth401k + annualContributions.total457b + contribution401a + annualContributions.tradIra + annualContributions.rothIra + yearSpouseTradIra + yearSpouseRothIra + annualContributions.hsa + yearSpouseEmpDeferral;
 
           const yearFica = calculateFicaTax(yearPhysicianIncome, yearSpouseIncome, filingStatus);
           const mcNii = estimateNetInvestmentIncome(taxable, sav);
@@ -1156,7 +1140,7 @@ const PhysicianFinancialPlanner = () => {
           const baselineNiit = calculateNiit(baselineAgi, mcNii, filingStatus);
           const baselineTotalTax = baselineFederalTax + yearFica + baselineNcTax + baselineNiit;
 
-          const yearSpending = (monthlySpending * 12) * inflationFactor;
+          const yearSpending = monthlySpending * 12;
           const yearDebtPayments = (sLoan > 0 ? studentLoanPayment * 12 : 0) + (mort > 0 ? mortgagePayment * 12 : 0) + (oDebt > 0 ? otherDebtPayment * 12 : 0);
           const yearMandatoryOutflows = yearSpending + yearDebtPayments;
           const yearTaxableInvestment = monthlyTaxableInvestment * 12;
@@ -1191,7 +1175,7 @@ const PhysicianFinancialPlanner = () => {
           acc401kPreTax += annualContributions.pre401k * sc + employerContrib;
           acc401kRoth += annualContributions.roth401k * sc;
           acc457b += annualContributions.total457b * sc;
-          acc401a += year401a * sc;
+          acc401a += contribution401a * sc;
           tradIra += (annualContributions.tradIra + yearSpouseTradIra) * sc;
           tradIraBasis += (annualContributions.tradIra + yearSpouseTradIra) * sc;
           rothIra += (annualContributions.rothIra + yearSpouseRothIra) * sc;
@@ -1232,17 +1216,17 @@ const PhysicianFinancialPlanner = () => {
             }
           }
 
-          sLoan = Math.max(0, sLoan * (1 + studentLoanRate / 100) - studentLoanPayment * 12);
-          mort = Math.max(0, mort * (1 + mortgageRate / 100) - mortgagePayment * 12);
-          oDebt = Math.max(0, oDebt * (1 + otherDebtRate / 100) - otherDebtPayment * 12);
+          sLoan = Math.max(0, sLoan * (1 + Math.max(0, studentLoanRate / 100 - ASSUMED_INFLATION)) - studentLoanPayment * 12);
+          mort = Math.max(0, mort * (1 + Math.max(0, mortgageRate / 100 - ASSUMED_INFLATION)) - mortgagePayment * 12);
+          oDebt = Math.max(0, oDebt * (1 + Math.max(0, otherDebtRate / 100 - ASSUMED_INFLATION)) - otherDebtPayment * 12);
         } else {
-          // ─── Drawdown phase ───
-          let remainingDraw = (monthlySpending * 12) * Math.pow(1 + inflationRate / 100, age - currentAge);
+          // ─── Drawdown phase (real dollars — flat spending) ───
+          let remainingDraw = monthlySpending * 12;
           const yearDebtService = (sLoan > 0 ? studentLoanPayment * 12 : 0) + (mort > 0 ? mortgagePayment * 12 : 0) + (oDebt > 0 ? otherDebtPayment * 12 : 0);
           remainingDraw += yearDebtService;
-          sLoan = Math.max(0, sLoan * (1 + studentLoanRate / 100) - studentLoanPayment * 12);
-          mort = Math.max(0, mort * (1 + mortgageRate / 100) - mortgagePayment * 12);
-          oDebt = Math.max(0, oDebt * (1 + otherDebtRate / 100) - otherDebtPayment * 12);
+          sLoan = Math.max(0, sLoan * (1 + Math.max(0, studentLoanRate / 100 - ASSUMED_INFLATION)) - studentLoanPayment * 12);
+          mort = Math.max(0, mort * (1 + Math.max(0, mortgageRate / 100 - ASSUMED_INFLATION)) - mortgagePayment * 12);
+          oDebt = Math.max(0, oDebt * (1 + Math.max(0, otherDebtRate / 100 - ASSUMED_INFLATION)) - otherDebtPayment * 12);
 
           const earlyWithdrawal = age < 60;
           const penaltyRate = earlyWithdrawal ? 0.10 : 0;
@@ -1351,7 +1335,7 @@ const PhysicianFinancialPlanner = () => {
     studentLoanBalance, studentLoanRate, studentLoanPayment, mortgageBalance, mortgageRate, mortgagePayment,
     otherDebtBalance, otherDebtRate, otherDebtPayment, monthlySpending, annualContributions,
     monthlyTaxableInvestment, retirementTaxRate, preVsRothSplit, totalComp, effSpouseIncome,
-    filingStatus, deduction, ncTaxDeduction, calculateFederalTax, calculateFicaTax, calculateNiit, estimateNetInvestmentIncome, includeSpouse, inflationRate]);
+    filingStatus, deduction, ncTaxDeduction, calculateFederalTax, calculateFicaTax, calculateNiit, estimateNetInvestmentIncome, includeSpouse, contribution401a, employerMatch, nonElectiveContribution]);
 
   // Format currency
   const formatCurrency = (value) => {
@@ -1529,7 +1513,7 @@ const PhysicianFinancialPlanner = () => {
         if (data.retirementAge !== undefined) setRetirementAge(data.retirementAge);
         if (data.spouseRetirementAge !== undefined) setSpouseRetirementAge(data.spouseRetirementAge);
         if (data.retirementTaxRate !== undefined) setRetirementTaxRate(data.retirementTaxRate);
-        if (data.inflationRate !== undefined) setInflationRate(data.inflationRate);
+        // inflationRate no longer used — real-return model (backward compat: silently ignore)
       } catch (error) {
         alert('Error importing file: ' + error.message);
       }
@@ -2312,33 +2296,7 @@ const PhysicianFinancialPlanner = () => {
         </div>
       </div>
 
-      {/* Inflation Assumption */}
-      <div className="bg-white border border-gray-200 rounded-lg p-6">
-        <h3 className="text-lg font-bold text-gray-800 mb-4">Inflation Assumption</h3>
-        <div className="space-y-4">
-          <div>
-            <div className="flex items-center space-x-2 mb-2">
-              <label className="block text-sm font-medium text-gray-700">Annual Inflation Rate: {inflationRate.toFixed(1)}%</label>
-              <InfoTip text="Annual inflation rate applied to both income and spending. Income receives cost-of-living adjustments only (no real raises). Employer contributions (match, non-elective, 401(a)) scale with inflated comp. IRS contribution limits and tax brackets are held flat — this creates bracket creep over time, which is the model's built-in conservatism. The long-term US average is approximately 3%." />
-            </div>
-            <input
-              type="range"
-              min="0"
-              max="6"
-              step="0.5"
-              value={inflationRate}
-              onChange={(e) => setInflationRate(Number(e.target.value))}
-              className="w-full"
-            />
-            <div className="flex justify-between text-xs text-gray-500 mt-1">
-              <span>0% (no inflation)</span>
-              <span>3% (historical avg)</span>
-              <span>6% (high inflation)</span>
-            </div>
-            <p className="text-xs text-gray-500 mt-2">At {inflationRate.toFixed(1)}%, by retirement age {retirementAge}: spending {formatCurrency(monthlySpending * 12)}/yr → {formatCurrency((monthlySpending * 12) * Math.pow(1 + inflationRate / 100, retirementAge - currentAge))}/yr | income {formatCurrency(totalComp)}/yr → {formatCurrency(totalComp * Math.pow(1 + inflationRate / 100, retirementAge - currentAge))}/yr. IRS limits and tax brackets frozen (conservative: bracket creep).</p>
-          </div>
-        </div>
-      </div>
+      {/* Real-Dollar Model Note */}
 
       {/* Personal Settings */}
       <div className="bg-white border border-gray-200 rounded-lg p-6">
@@ -2742,11 +2700,11 @@ const PhysicianFinancialPlanner = () => {
           {retiresBefore59 && netWorthProjection.length > 0 && (() => {
             const retireData = netWorthProjection.find((d) => d.age === retirementAge);
             const bridge457b = retireData ? retireData.acc457b : 0;
-            const annualSpend = (monthlySpending * 12) * Math.pow(1 + inflationRate / 100, retirementAge - currentAge);
+            const annualSpend = monthlySpending * 12;
             const bridgeYears = annualSpend > 0 ? (bridge457b / annualSpend).toFixed(1) : '—';
             return (
               <p className="text-sm text-emerald-700 mt-2 font-medium">
-                At retirement (age {retirementAge}), your projected 457(b) balance of {formatCurrency(bridge457b)} covers approximately <strong>{bridgeYears} years</strong> of inflation-adjusted annual spending before needing to touch penalized accounts.
+                At retirement (age {retirementAge}), your projected 457(b) balance of {formatCurrency(bridge457b)} covers approximately <strong>{bridgeYears} years</strong> of annual spending (in today's dollars) before needing to touch penalized accounts.
               </p>
             );
           })()}
@@ -2960,17 +2918,15 @@ const PhysicianFinancialPlanner = () => {
           {/* ── Right Column ── */}
           <div>
             <Section title="Investment Return Assumptions">
-              <Row label="Equity Return" value="7.0% nominal" note="Long-term US equity average" />
-              <Row label="Bond Return" value="4.5% nominal" note="Investment-grade bond assumption" />
+              <Row label="Model Type" value="Real (today's dollars)" note="All values shown in current purchasing power" />
+              <Row label="Assumed Inflation" value="3.0%" note="Subtracted from nominal returns; not shown separately" />
+              <Row label="Equity Real Return" value="4.0%" note="7.0% nominal − 3.0% inflation" />
+              <Row label="Bond Real Return" value="1.5%" note="4.5% nominal − 3.0% inflation" />
               <Row label="Your Equity Allocation" value={`${equityAllocation}%`} note="User-adjustable" />
-              <Row label="Blended Return" value={`${(blendedReturn * 100).toFixed(2)}%`} note={`${equityAllocation}% × 7% + ${100 - equityAllocation}% × 4.5%`} />
+              <Row label="Blended Real Return" value={`${(blendedReturn * 100).toFixed(2)}%`} note={`${equityAllocation}% × 4% + ${100 - equityAllocation}% × 1.5%`} />
               <Row label="Taxable Account Drag" value="1.0% / year" note="Dividends, cap gains, turnover" />
-              <Row label="Cash Savings (HYSA)" value="3.0% / year" note="No additional contributions modeled" />
-              <Row label="Inflation Rate" value={`${inflationRate.toFixed(1)}%`} note="Applied to income and spending equally (COLA only)" />
-              <Row label="Income Growth" value={`${inflationRate.toFixed(1)}% (matches inflation)`} note="No real raises — cost-of-living adjustments only" />
-              <Row label="IRS Limits / Tax Brackets" value="Frozen at 2026" note="Creates bracket creep over time (conservative)" />
-              <Row label="Employer Contributions" value="Scale with inflated comp" note="Match, non-elective, 401(a) grow; capped at frozen 415(c)" />
-              <Row label="Real Return (approx)" value={`${((blendedReturn * 100) - inflationRate).toFixed(1)}%`} note={`Blended ${(blendedReturn * 100).toFixed(1)}% minus ${inflationRate.toFixed(1)}% inflation`} />
+              <Row label="Cash Savings (HYSA)" value="~0% real" note="3% nominal ≈ inflation; preserves purchasing power only" />
+              <Row label="Debt Interest" value="Real rate" note="Nominal rate minus 3% inflation (debt erodes faster in real terms)" />
             </Section>
 
             <Section title="Monte Carlo Simulation">
@@ -2986,7 +2942,7 @@ const PhysicianFinancialPlanner = () => {
             </Section>
 
             <Section title="Retirement & Drawdown">
-              <Row label="Retirement Spending Inflation" value="3.0% / year" note="Applied from retirement age forward" />
+              <Row label="Retirement Spending" value="Flat (real dollars)" note="$1 today = $1 at retirement in purchasing power" />
               <Row label="Retirement Debt Service" value="Funded from draws" note="Debt payments added to annual draw amount" />
               <Row label="Early Withdrawal Penalty" value="10%" note="401(k), 401(a), Trad IRA before age 59½" />
               <Row label="457(b) Penalty" value="$0" note="Exempt after separation from employer" />
