@@ -203,6 +203,7 @@ const PhysicianFinancialPlanner = () => {
   const [retirementAge, setRetirementAge] = useState(65);
   const [spouseRetirementAge, setSpouseRetirementAge] = useState(65);
   const [retirementTaxRate, setRetirementTaxRate] = useState(22); // Estimated effective tax rate on pre-tax withdrawals in retirement
+  const [inflationRate, setInflationRate] = useState(3.0); // Annual inflation assumption — applied to spending, NOT to income or IRS limits (conservative)
 
   // ── localStorage auto-save/restore ───────────────────────────────────
   const STORAGE_KEY = 'physician-financial-planner-state';
@@ -263,6 +264,7 @@ const PhysicianFinancialPlanner = () => {
       if (d.retirementAge !== undefined) setRetirementAge(d.retirementAge);
       if (d.spouseRetirementAge !== undefined) setSpouseRetirementAge(d.spouseRetirementAge);
       if (d.retirementTaxRate !== undefined) setRetirementTaxRate(d.retirementTaxRate);
+      if (d.inflationRate !== undefined) setInflationRate(d.inflationRate);
     } catch (e) {
       console.warn('[PhysicianFinancialPlanner] Failed to restore from localStorage:', e);
     }
@@ -286,6 +288,7 @@ const PhysicianFinancialPlanner = () => {
           studentLoanPayment, mortgageBalance, mortgageRate, mortgagePayment,
           otherDebtBalance, otherDebtRate, otherDebtPayment, monthlyTaxableInvestment,
           equityAllocation, currentAge, retirementAge, spouseRetirementAge, retirementTaxRate,
+          inflationRate,
         };
         localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
       } catch (e) {
@@ -303,7 +306,7 @@ const PhysicianFinancialPlanner = () => {
     savingsBalance, monthlySpending, studentLoanBalance, studentLoanRate,
     studentLoanPayment, mortgageBalance, mortgageRate, mortgagePayment,
     otherDebtBalance, otherDebtRate, otherDebtPayment, monthlyTaxableInvestment,
-    equityAllocation, currentAge, retirementAge, spouseRetirementAge, retirementTaxRate]);
+    equityAllocation, currentAge, retirementAge, spouseRetirementAge, retirementTaxRate, inflationRate]);
 
   // Derived total compensation
   const totalComp = baseSalary + trueUpPayments;
@@ -722,7 +725,8 @@ const PhysicianFinancialPlanner = () => {
         const baselineTotalTax = baselineFederalTax + yearFica + baselineNcTax + baselineNiit;
 
         // Step 4: Check affordability with zero contributions
-        const yearSpending = monthlySpending * 12;
+        // Spending inflates annually — income and IRS limits do NOT (conservative assumption)
+        const yearSpending = (monthlySpending * 12) * Math.pow(1 + inflationRate / 100, age - currentAge);
         const yearDebtPayments = (sLoan > 0 ? studentLoanPayment * 12 : 0) + (mort > 0 ? mortgagePayment * 12 : 0) + (oDebt > 0 ? otherDebtPayment * 12 : 0);
         const yearMandatoryOutflows = yearSpending + yearDebtPayments;
         const yearTaxableInvestment = monthlyTaxableInvestment * 12;
@@ -829,8 +833,8 @@ const PhysicianFinancialPlanner = () => {
         mort = Math.max(0, mort * (1 + mortgageRate / 100) - mortgagePayment * 12);
         oDebt = Math.max(0, oDebt * (1 + otherDebtRate / 100) - otherDebtPayment * 12);
       } else {
-        // Drawdown phase: annual spending inflated at 3%, plus debt service
-        let remainingDraw = (monthlySpending * 12) * Math.pow(1.03, age - retirementAge);
+        // Drawdown phase: spending inflated from current age through retirement and beyond
+        let remainingDraw = (monthlySpending * 12) * Math.pow(1 + inflationRate / 100, age - currentAge);
 
         // Debt service in retirement — payments must come from drawn funds
         const yearDebtService =
@@ -944,7 +948,7 @@ const PhysicianFinancialPlanner = () => {
     // Attach metadata to the array for easy access
     data.shortfallAge = shortfallAge;
     return data;
-  }, [currentAge, retirementAge, effSpouseRetirementAge, blendedReturn, balance401k, balance457b, balance401a, balanceTraditionalIra, balanceRothIra, balanceHsa, effSpousePreTaxBalance, effSpouseRothBalance, taxableBrokerage, savingsBalance, studentLoanBalance, studentLoanRate, studentLoanPayment, mortgageBalance, mortgageRate, mortgagePayment, otherDebtBalance, otherDebtRate, otherDebtPayment, monthlySpending, annualContributions, monthlyTaxableInvestment, retirementTaxRate, preVsRothSplit, totalComp, effSpouseIncome, effSpouseEmployerTotal, filingStatus, deduction, ncTaxDeduction, calculateFederalTax, calculateFicaTax, calculateNiit, estimateNetInvestmentIncome, includeSpouse]);
+  }, [currentAge, retirementAge, effSpouseRetirementAge, blendedReturn, balance401k, balance457b, balance401a, balanceTraditionalIra, balanceRothIra, balanceHsa, effSpousePreTaxBalance, effSpouseRothBalance, taxableBrokerage, savingsBalance, studentLoanBalance, studentLoanRate, studentLoanPayment, mortgageBalance, mortgageRate, mortgagePayment, otherDebtBalance, otherDebtRate, otherDebtPayment, monthlySpending, annualContributions, monthlyTaxableInvestment, retirementTaxRate, preVsRothSplit, totalComp, effSpouseIncome, effSpouseEmployerTotal, filingStatus, deduction, ncTaxDeduction, calculateFederalTax, calculateFicaTax, calculateNiit, estimateNetInvestmentIncome, includeSpouse, inflationRate]);
 
   // Retirement metrics
   const retirementMetrics = useMemo(() => {
@@ -1127,7 +1131,7 @@ const PhysicianFinancialPlanner = () => {
           const baselineNiit = calculateNiit(baselineAgi, mcNii, filingStatus);
           const baselineTotalTax = baselineFederalTax + yearFica + baselineNcTax + baselineNiit;
 
-          const yearSpending = monthlySpending * 12;
+          const yearSpending = (monthlySpending * 12) * Math.pow(1 + inflationRate / 100, age - currentAge);
           const yearDebtPayments = (sLoan > 0 ? studentLoanPayment * 12 : 0) + (mort > 0 ? mortgagePayment * 12 : 0) + (oDebt > 0 ? otherDebtPayment * 12 : 0);
           const yearMandatoryOutflows = yearSpending + yearDebtPayments;
           const yearTaxableInvestment = monthlyTaxableInvestment * 12;
@@ -1208,7 +1212,7 @@ const PhysicianFinancialPlanner = () => {
           oDebt = Math.max(0, oDebt * (1 + otherDebtRate / 100) - otherDebtPayment * 12);
         } else {
           // ─── Drawdown phase ───
-          let remainingDraw = (monthlySpending * 12) * Math.pow(1.03, age - retirementAge);
+          let remainingDraw = (monthlySpending * 12) * Math.pow(1 + inflationRate / 100, age - currentAge);
           const yearDebtService = (sLoan > 0 ? studentLoanPayment * 12 : 0) + (mort > 0 ? mortgagePayment * 12 : 0) + (oDebt > 0 ? otherDebtPayment * 12 : 0);
           remainingDraw += yearDebtService;
           sLoan = Math.max(0, sLoan * (1 + studentLoanRate / 100) - studentLoanPayment * 12);
@@ -1322,7 +1326,7 @@ const PhysicianFinancialPlanner = () => {
     studentLoanBalance, studentLoanRate, studentLoanPayment, mortgageBalance, mortgageRate, mortgagePayment,
     otherDebtBalance, otherDebtRate, otherDebtPayment, monthlySpending, annualContributions,
     monthlyTaxableInvestment, retirementTaxRate, preVsRothSplit, totalComp, effSpouseIncome,
-    filingStatus, deduction, ncTaxDeduction, calculateFederalTax, calculateFicaTax, calculateNiit, estimateNetInvestmentIncome, includeSpouse]);
+    filingStatus, deduction, ncTaxDeduction, calculateFederalTax, calculateFicaTax, calculateNiit, estimateNetInvestmentIncome, includeSpouse, inflationRate]);
 
   // Format currency
   const formatCurrency = (value) => {
@@ -1502,6 +1506,7 @@ const PhysicianFinancialPlanner = () => {
         if (data.retirementAge !== undefined) setRetirementAge(data.retirementAge);
         if (data.spouseRetirementAge !== undefined) setSpouseRetirementAge(data.spouseRetirementAge);
         if (data.retirementTaxRate !== undefined) setRetirementTaxRate(data.retirementTaxRate);
+        if (data.inflationRate !== undefined) setInflationRate(data.inflationRate);
       } catch (error) {
         alert('Error importing file: ' + error.message);
       }
@@ -2300,6 +2305,34 @@ const PhysicianFinancialPlanner = () => {
         </div>
       </div>
 
+      {/* Inflation Assumption */}
+      <div className="bg-white border border-gray-200 rounded-lg p-6">
+        <h3 className="text-lg font-bold text-gray-800 mb-4">Inflation Assumption</h3>
+        <div className="space-y-4">
+          <div>
+            <div className="flex items-center space-x-2 mb-2">
+              <label className="block text-sm font-medium text-gray-700">Annual Inflation Rate: {inflationRate.toFixed(1)}%</label>
+              <InfoTip text="Annual inflation rate applied to your living expenses throughout the projection. This is a CONSERVATIVE model: spending inflates every year, but income, IRS contribution limits, and tax brackets are held flat. This means your surplus shrinks over time as costs rise but your income does not. The long-term US average is approximately 3%. Adjust down for optimistic scenarios, up for pessimistic ones." />
+            </div>
+            <input
+              type="range"
+              min="0"
+              max="6"
+              step="0.5"
+              value={inflationRate}
+              onChange={(e) => setInflationRate(Number(e.target.value))}
+              className="w-full"
+            />
+            <div className="flex justify-between text-xs text-gray-500 mt-1">
+              <span>0% (no inflation)</span>
+              <span>3% (historical avg)</span>
+              <span>6% (high inflation)</span>
+            </div>
+            <p className="text-xs text-gray-500 mt-2">At {inflationRate.toFixed(1)}%, your {formatCurrency(monthlySpending * 12)}/yr spending becomes {formatCurrency((monthlySpending * 12) * Math.pow(1 + inflationRate / 100, retirementAge - currentAge))}/yr by retirement age {retirementAge}. Income and IRS limits are NOT inflated (conservative).</p>
+          </div>
+        </div>
+      </div>
+
       {/* Personal Settings */}
       <div className="bg-white border border-gray-200 rounded-lg p-6">
         <h3 className="text-lg font-bold text-gray-800 mb-4">Personal Settings</h3>
@@ -2706,11 +2739,11 @@ const PhysicianFinancialPlanner = () => {
           {retiresBefore59 && netWorthProjection.length > 0 && (() => {
             const retireData = netWorthProjection.find((d) => d.age === retirementAge);
             const bridge457b = retireData ? retireData.acc457b : 0;
-            const annualSpend = monthlySpending * 12;
+            const annualSpend = (monthlySpending * 12) * Math.pow(1 + inflationRate / 100, retirementAge - currentAge);
             const bridgeYears = annualSpend > 0 ? (bridge457b / annualSpend).toFixed(1) : '—';
             return (
               <p className="text-sm text-emerald-700 mt-2 font-medium">
-                At retirement (age {retirementAge}), your projected 457(b) balance of {formatCurrency(bridge457b)} covers approximately <strong>{bridgeYears} years</strong> of current annual spending before needing to touch penalized accounts.
+                At retirement (age {retirementAge}), your projected 457(b) balance of {formatCurrency(bridge457b)} covers approximately <strong>{bridgeYears} years</strong> of inflation-adjusted annual spending before needing to touch penalized accounts.
               </p>
             );
           })()}
@@ -2926,6 +2959,8 @@ const PhysicianFinancialPlanner = () => {
               <Row label="Blended Return" value={`${(blendedReturn * 100).toFixed(2)}%`} note={`${equityAllocation}% × 7% + ${100 - equityAllocation}% × 4.5%`} />
               <Row label="Taxable Account Drag" value="1.0% / year" note="Dividends, cap gains, turnover" />
               <Row label="Cash Savings (HYSA)" value="3.0% / year" note="No additional contributions modeled" />
+              <Row label="Inflation Rate" value={`${inflationRate.toFixed(1)}%`} note="Applied to spending only — income and IRS limits held flat (conservative)" />
+              <Row label="Real Return (approx)" value={`${((blendedReturn * 100) - inflationRate).toFixed(1)}%`} note={`Blended ${(blendedReturn * 100).toFixed(1)}% minus ${inflationRate.toFixed(1)}% inflation`} />
             </Section>
 
             <Section title="Monte Carlo Simulation">
