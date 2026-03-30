@@ -836,20 +836,35 @@ const PhysicianFinancialPlanner = () => {
       if (!isRetired) {
         // Accumulation phase with year-by-year cash flow modeling
         // Step 1: Determine this year's income based on who's still working
-        const yearPhysicianIncome = totalComp;
-        const yearSpouseIncome = spouseIsRetired ? 0 : effSpouseIncome;
+        // Income grows with inflation (cost-of-living adjustments only — no real raises)
+        const inflationFactor = Math.pow(1 + inflationRate / 100, age - currentAge);
+        const yearPhysicianIncome = totalComp * inflationFactor;
+        const yearSpouseIncome = spouseIsRetired ? 0 : effSpouseIncome * inflationFactor;
         const yearGrossIncome = yearPhysicianIncome + yearSpouseIncome;
 
-        // Step 2: Planned contributions (spouse contributions stop when spouse retires)
+        // Step 2: Planned contributions
+        // Employee deferrals are capped at frozen IRS limits — stay at current-year values
+        // Employer contributions (match, non-elective, 401(a)) are %-based and scale with inflated comp
         const yearSpouseTradIra = spouseIsRetired ? 0 : annualContributions.spouseTradIra;
         const yearSpouseRothIra = spouseIsRetired ? 0 : annualContributions.spouseRothIra;
         const yearSpouseEmpPreTax = spouseIsRetired ? 0 : annualContributions.spouseEmpPreTax;
         const yearSpouseEmpRoth = spouseIsRetired ? 0 : annualContributions.spouseEmpRoth;
         const yearSpouseEmpDeferral = yearSpouseEmpPreTax + yearSpouseEmpRoth;
-        const yearSpouseEmpMatch = spouseIsRetired ? 0 : annualContributions.spouseEmpMatch;
-        const plannedPreTaxDeductible = annualContributions.pre401k + annualContributions.total457b + annualContributions.total401a + annualContributions.hsa + yearSpouseEmpPreTax;
-        const plannedEmployeeContrib = annualContributions.pre401k + annualContributions.roth401k + annualContributions.total457b + annualContributions.total401a + annualContributions.tradIra + annualContributions.rothIra + yearSpouseTradIra + yearSpouseRothIra + annualContributions.hsa + yearSpouseEmpDeferral;
-        const employerContrib = annualContributions.match + annualContributions.nonElective;
+        const yearSpouseEmpMatch = spouseIsRetired ? 0 : annualContributions.spouseEmpMatch * inflationFactor;
+
+        // Recalculate employer contributions on inflated comp (capped at frozen IRS limits)
+        const yearMatchableComp = Math.min(yearPhysicianIncome, IRS_COMP_LIMIT);
+        const yearEffDeferralRate = yearMatchableComp > 0 ? annualContributions.pre401k + annualContributions.roth401k : 0;
+        const yearMatchRate = yearMatchableComp > 0 ? Math.min((annualContributions.pre401k + annualContributions.roth401k) / yearMatchableComp, 0.03) : 0;
+        const yearMatch = yearMatchRate * yearMatchableComp;
+        const yearNonElective = yearMatchableComp * 0.03;
+        const yearUsed415c = (annualContributions.pre401k + annualContributions.roth401k) + yearMatch + yearNonElective;
+        const yearRaw401a = yearMatchableComp * 0.06;
+        const year401a = Math.max(0, Math.min(yearRaw401a, IRS_415C_LIMIT - yearUsed415c));
+        const employerContrib = yearMatch + yearNonElective;
+
+        const plannedPreTaxDeductible = annualContributions.pre401k + annualContributions.total457b + year401a + annualContributions.hsa + yearSpouseEmpPreTax;
+        const plannedEmployeeContrib = annualContributions.pre401k + annualContributions.roth401k + annualContributions.total457b + year401a + annualContributions.tradIra + annualContributions.rothIra + yearSpouseTradIra + yearSpouseRothIra + annualContributions.hsa + yearSpouseEmpDeferral;
 
         // Step 3: Compute taxes WITHOUT pre-tax deductions first to get true baseline take-home
         const yearFica = calculateFicaTax(yearPhysicianIncome, yearSpouseIncome, filingStatus);
@@ -863,8 +878,9 @@ const PhysicianFinancialPlanner = () => {
         const baselineTotalTax = baselineFederalTax + yearFica + baselineNcTax + baselineNiit;
 
         // Step 4: Check affordability with zero contributions
-        // Spending inflates annually — income and IRS limits do NOT (conservative assumption)
-        const yearSpending = (monthlySpending * 12) * Math.pow(1 + inflationRate / 100, age - currentAge);
+        // Both income and spending inflate at the same rate (COLA only — no real raises)
+        // IRS limits and tax brackets are frozen (conservative: bracket creep erodes take-home)
+        const yearSpending = (monthlySpending * 12) * inflationFactor;
         const yearDebtPayments = (sLoan > 0 ? studentLoanPayment * 12 : 0) + (mort > 0 ? mortgagePayment * 12 : 0) + (oDebt > 0 ? otherDebtPayment * 12 : 0);
         const yearMandatoryOutflows = yearSpending + yearDebtPayments;
         const yearTaxableInvestment = monthlyTaxableInvestment * 12;
@@ -920,7 +936,7 @@ const PhysicianFinancialPlanner = () => {
         acc401kPreTax += annualContributions.pre401k * sc + employerContrib; // employer always funds
         acc401kRoth += annualContributions.roth401k * sc;
         acc457b += annualContributions.total457b * sc;
-        acc401a += annualContributions.total401a * sc;
+        acc401a += year401a * sc;
         tradIra += (annualContributions.tradIra + yearSpouseTradIra) * sc;
         tradIraBasis += (annualContributions.tradIra + yearSpouseTradIra) * sc;
         rothIra += (annualContributions.rothIra + yearSpouseRothIra) * sc;
@@ -1245,8 +1261,9 @@ const PhysicianFinancialPlanner = () => {
 
         if (!isRetired) {
           // ─── Accumulation phase (same logic as deterministic, but with random return) ───
-          const yearPhysicianIncome = totalComp;
-          const yearSpouseIncome = spouseIsRetired ? 0 : effSpouseIncome;
+          const inflationFactor = Math.pow(1 + inflationRate / 100, age - currentAge);
+          const yearPhysicianIncome = totalComp * inflationFactor;
+          const yearSpouseIncome = spouseIsRetired ? 0 : effSpouseIncome * inflationFactor;
           const yearGrossIncome = yearPhysicianIncome + yearSpouseIncome;
 
           const yearSpouseTradIra = spouseIsRetired ? 0 : annualContributions.spouseTradIra;
@@ -1254,10 +1271,20 @@ const PhysicianFinancialPlanner = () => {
           const yearSpouseEmpPreTax = spouseIsRetired ? 0 : annualContributions.spouseEmpPreTax;
           const yearSpouseEmpRoth = spouseIsRetired ? 0 : annualContributions.spouseEmpRoth;
           const yearSpouseEmpDeferral = yearSpouseEmpPreTax + yearSpouseEmpRoth;
-          const yearSpouseEmpMatch = spouseIsRetired ? 0 : annualContributions.spouseEmpMatch;
-          const plannedPreTaxDeductible = annualContributions.pre401k + annualContributions.total457b + annualContributions.total401a + annualContributions.hsa + yearSpouseEmpPreTax;
-          const plannedEmployeeContrib = annualContributions.pre401k + annualContributions.roth401k + annualContributions.total457b + annualContributions.total401a + annualContributions.tradIra + annualContributions.rothIra + yearSpouseTradIra + yearSpouseRothIra + annualContributions.hsa + yearSpouseEmpDeferral;
-          const employerContrib = annualContributions.match + annualContributions.nonElective;
+          const yearSpouseEmpMatch = spouseIsRetired ? 0 : annualContributions.spouseEmpMatch * inflationFactor;
+
+          // Recalculate employer contributions on inflated comp
+          const yearMatchableComp = Math.min(yearPhysicianIncome, IRS_COMP_LIMIT);
+          const yearMatchRate = yearMatchableComp > 0 ? Math.min((annualContributions.pre401k + annualContributions.roth401k) / yearMatchableComp, 0.03) : 0;
+          const yearMatch = yearMatchRate * yearMatchableComp;
+          const yearNonElective = yearMatchableComp * 0.03;
+          const yearUsed415c = (annualContributions.pre401k + annualContributions.roth401k) + yearMatch + yearNonElective;
+          const yearRaw401a = yearMatchableComp * 0.06;
+          const year401a = Math.max(0, Math.min(yearRaw401a, IRS_415C_LIMIT - yearUsed415c));
+          const employerContrib = yearMatch + yearNonElective;
+
+          const plannedPreTaxDeductible = annualContributions.pre401k + annualContributions.total457b + year401a + annualContributions.hsa + yearSpouseEmpPreTax;
+          const plannedEmployeeContrib = annualContributions.pre401k + annualContributions.roth401k + annualContributions.total457b + year401a + annualContributions.tradIra + annualContributions.rothIra + yearSpouseTradIra + yearSpouseRothIra + annualContributions.hsa + yearSpouseEmpDeferral;
 
           const yearFica = calculateFicaTax(yearPhysicianIncome, yearSpouseIncome, filingStatus);
           const mcNii = estimateNetInvestmentIncome(taxable, sav);
@@ -1269,7 +1296,7 @@ const PhysicianFinancialPlanner = () => {
           const baselineNiit = calculateNiit(baselineAgi, mcNii, filingStatus);
           const baselineTotalTax = baselineFederalTax + yearFica + baselineNcTax + baselineNiit;
 
-          const yearSpending = (monthlySpending * 12) * Math.pow(1 + inflationRate / 100, age - currentAge);
+          const yearSpending = (monthlySpending * 12) * inflationFactor;
           const yearDebtPayments = (sLoan > 0 ? studentLoanPayment * 12 : 0) + (mort > 0 ? mortgagePayment * 12 : 0) + (oDebt > 0 ? otherDebtPayment * 12 : 0);
           const yearMandatoryOutflows = yearSpending + yearDebtPayments;
           const yearTaxableInvestment = monthlyTaxableInvestment * 12;
@@ -1304,7 +1331,7 @@ const PhysicianFinancialPlanner = () => {
           acc401kPreTax += annualContributions.pre401k * sc + employerContrib;
           acc401kRoth += annualContributions.roth401k * sc;
           acc457b += annualContributions.total457b * sc;
-          acc401a += annualContributions.total401a * sc;
+          acc401a += year401a * sc;
           tradIra += (annualContributions.tradIra + yearSpouseTradIra) * sc;
           tradIraBasis += (annualContributions.tradIra + yearSpouseTradIra) * sc;
           rothIra += (annualContributions.rothIra + yearSpouseRothIra) * sc;
@@ -2432,7 +2459,7 @@ const PhysicianFinancialPlanner = () => {
           <div>
             <div className="flex items-center space-x-2 mb-2">
               <label className="block text-sm font-medium text-gray-700">Annual Inflation Rate: {inflationRate.toFixed(1)}%</label>
-              <InfoTip text="Annual inflation rate applied to your living expenses throughout the projection. This is a CONSERVATIVE model: spending inflates every year, but income, IRS contribution limits, and tax brackets are held flat. This means your surplus shrinks over time as costs rise but your income does not. The long-term US average is approximately 3%. Adjust down for optimistic scenarios, up for pessimistic ones." />
+              <InfoTip text="Annual inflation rate applied to both income and spending. Income receives cost-of-living adjustments only (no real raises). Employer contributions (match, non-elective, 401(a)) scale with inflated comp. IRS contribution limits and tax brackets are held flat — this creates bracket creep over time, which is the model's built-in conservatism. The long-term US average is approximately 3%." />
             </div>
             <input
               type="range"
@@ -2448,7 +2475,7 @@ const PhysicianFinancialPlanner = () => {
               <span>3% (historical avg)</span>
               <span>6% (high inflation)</span>
             </div>
-            <p className="text-xs text-gray-500 mt-2">At {inflationRate.toFixed(1)}%, your {formatCurrency(monthlySpending * 12)}/yr spending becomes {formatCurrency((monthlySpending * 12) * Math.pow(1 + inflationRate / 100, retirementAge - currentAge))}/yr by retirement age {retirementAge}. Income and IRS limits are NOT inflated (conservative).</p>
+            <p className="text-xs text-gray-500 mt-2">At {inflationRate.toFixed(1)}%, by retirement age {retirementAge}: spending {formatCurrency(monthlySpending * 12)}/yr → {formatCurrency((monthlySpending * 12) * Math.pow(1 + inflationRate / 100, retirementAge - currentAge))}/yr | income {formatCurrency(totalComp)}/yr → {formatCurrency(totalComp * Math.pow(1 + inflationRate / 100, retirementAge - currentAge))}/yr. IRS limits and tax brackets frozen (conservative: bracket creep).</p>
           </div>
         </div>
       </div>
@@ -3079,7 +3106,10 @@ const PhysicianFinancialPlanner = () => {
               <Row label="Blended Return" value={`${(blendedReturn * 100).toFixed(2)}%`} note={`${equityAllocation}% × 7% + ${100 - equityAllocation}% × 4.5%`} />
               <Row label="Taxable Account Drag" value="1.0% / year" note="Dividends, cap gains, turnover" />
               <Row label="Cash Savings (HYSA)" value="3.0% / year" note="No additional contributions modeled" />
-              <Row label="Inflation Rate" value={`${inflationRate.toFixed(1)}%`} note="Applied to spending only — income and IRS limits held flat (conservative)" />
+              <Row label="Inflation Rate" value={`${inflationRate.toFixed(1)}%`} note="Applied to income and spending equally (COLA only)" />
+              <Row label="Income Growth" value={`${inflationRate.toFixed(1)}% (matches inflation)`} note="No real raises — cost-of-living adjustments only" />
+              <Row label="IRS Limits / Tax Brackets" value="Frozen at 2026" note="Creates bracket creep over time (conservative)" />
+              <Row label="Employer Contributions" value="Scale with inflated comp" note="Match, non-elective, 401(a) grow; capped at frozen 415(c)" />
               <Row label="Real Return (approx)" value={`${((blendedReturn * 100) - inflationRate).toFixed(1)}%`} note={`Blended ${(blendedReturn * 100).toFixed(1)}% minus ${inflationRate.toFixed(1)}% inflation`} />
             </Section>
 
