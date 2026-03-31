@@ -372,8 +372,8 @@ const PhysicianFinancialPlanner = () => {
   // All projections are in today's dollars — what you see is purchasing power
   const ASSUMED_INFLATION = 0.03; // 3% — used only to derive real returns from nominal
   const blendedReturn = useMemo(() => {
-    const bondReturn = 0.015;   // 4.5% nominal − 3% inflation = 1.5% real
-    const equityReturn = 0.04;  // 7.0% nominal − 3% inflation = 4.0% real
+    const bondReturn = 0.02;    // 5.0% nominal − 3% inflation = 2.0% real
+    const equityReturn = 0.06;  // 9.0% nominal − 3% inflation = 6.0% real
     return (equityAllocation / 100) * equityReturn + ((100 - equityAllocation) / 100) * bondReturn;
   }, [equityAllocation]);
 
@@ -2252,12 +2252,12 @@ const PhysicianFinancialPlanner = () => {
               <div className="bg-gray-50 border border-gray-200 rounded p-3">
                 <p className="text-xs text-gray-600">Bonds</p>
                 <p className="text-sm font-bold text-gray-900">{100 - equityAllocation}%</p>
-                <p className="text-xs text-gray-600">1.5% real <span className="text-gray-400">(4.5% nominal)</span></p>
+                <p className="text-xs text-gray-600">2.0% real <span className="text-gray-400">(5% nominal)</span></p>
               </div>
               <div className="bg-blue-50 border border-blue-200 rounded p-3">
                 <p className="text-xs text-blue-600">Equities</p>
                 <p className="text-sm font-bold text-blue-900">{equityAllocation}%</p>
-                <p className="text-xs text-blue-600">4.0% real <span className="text-blue-400">(7% nominal)</span></p>
+                <p className="text-xs text-blue-600">6.0% real <span className="text-blue-400">(9% nominal)</span></p>
               </div>
               <div className="bg-green-50 border border-green-200 rounded p-3">
                 <p className="text-xs text-green-600">Blended Real Return</p>
@@ -2265,7 +2265,7 @@ const PhysicianFinancialPlanner = () => {
                 <p className="text-xs text-green-600">after 3% inflation</p>
               </div>
             </div>
-            <p className="text-xs text-gray-500 mt-3">Returns are shown after subtracting 3% assumed inflation. A 4% real equity return is equivalent to the historical ~7% nominal return in today's purchasing power. This means every dollar shown in the projections represents what that dollar buys today.</p>
+            <p className="text-xs text-gray-500 mt-3">Returns are shown after subtracting 3% assumed inflation. A 6% real equity return reflects the long-term historical average (~9% nominal). Every dollar shown in the projections represents what that dollar buys today.</p>
           </div>
         </div>
       </div>
@@ -2930,10 +2930,10 @@ const PhysicianFinancialPlanner = () => {
             <Section title="Investment Return Assumptions">
               <Row label="Model Type" value="Real (today's dollars)" note="All values shown in current purchasing power" />
               <Row label="Assumed Inflation" value="3.0%" note="Subtracted from nominal returns; not shown separately" />
-              <Row label="Equity Real Return" value="4.0%" note="7.0% nominal − 3.0% inflation" />
-              <Row label="Bond Real Return" value="1.5%" note="4.5% nominal − 3.0% inflation" />
+              <Row label="Equity Real Return" value="6.0%" note="9.0% nominal − 3.0% inflation (long-term historical avg)" />
+              <Row label="Bond Real Return" value="2.0%" note="5.0% nominal − 3.0% inflation" />
               <Row label="Your Equity Allocation" value={`${equityAllocation}%`} note="User-adjustable" />
-              <Row label="Blended Real Return" value={`${(blendedReturn * 100).toFixed(2)}%`} note={`${equityAllocation}% × 4% + ${100 - equityAllocation}% × 1.5%`} />
+              <Row label="Blended Real Return" value={`${(blendedReturn * 100).toFixed(2)}%`} note={`${equityAllocation}% × 6% + ${100 - equityAllocation}% × 2%`} />
               <Row label="Taxable Account Drag" value="1.0% / year" note="Dividends, cap gains, turnover" />
               <Row label="Cash Savings (HYSA)" value="~0% real" note="3% nominal ≈ inflation; preserves purchasing power only" />
               <Row label="Debt Interest" value="Real rate" note="Nominal rate minus 3% inflation (debt erodes faster in real terms)" />
