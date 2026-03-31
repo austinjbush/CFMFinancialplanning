@@ -1022,7 +1022,7 @@ const PhysicianFinancialPlanner = () => {
   // Uses a seeded PRNG (mulberry32) so results are stable across re-renders with same inputs.
   // Produces percentile bands for net worth at each age plus a success probability.
   const monteCarloData = useMemo(() => {
-    const NUM_SIMS = 300;
+    const NUM_SIMS = 5000;
     const EQUITY_VOL = 0.16;  // Annual equity volatility (~16% historical S&P 500)
     const BOND_VOL = 0.06;    // Annual bond volatility (~6% historical aggregate)
     const eqWeight = equityAllocation / 100;

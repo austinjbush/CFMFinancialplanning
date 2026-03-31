@@ -263,10 +263,22 @@ const PhysicianFinancialPlanner = () => {
   const [activeTab, setActiveTab] = useState(0);
   const [detailedChart, setDetailedChart] = useState(false); // Toggle between simple net worth and detailed account breakdown
   const [showMonteCarlo, setShowMonteCarlo] = useState(false); // Toggle Monte Carlo fan chart overlay
+  const [chartFullscreen, setChartFullscreen] = useState(false); // Fullscreen chart overlay
+
+  // Escape key closes fullscreen chart
+  useEffect(() => {
+    if (!chartFullscreen) return;
+    const handler = (e) => { if (e.key === 'Escape') setChartFullscreen(false); };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [chartFullscreen]);
   const [includeSpouse, setIncludeSpouse] = useState(false); // Toggle spouse/partner income and accounts
   const [showDisclaimer, setShowDisclaimer] = useState(() => {
     try { return !localStorage.getItem('physician-fp-disclaimer-accepted'); } catch { return true; }
   });
+
+  // Scenario comparison — stores a frozen snapshot for overlay comparison
+  const [savedScenario, setSavedScenario] = useState(null);
 
   // Income & Compensation
   const [baseSalary, setBaseSalary] = useState(0);
@@ -285,7 +297,7 @@ const PhysicianFinancialPlanner = () => {
   const [deferral457bPercentage, setDeferral457bPercentage] = useState(0); // Percentage of base salary
 
   // Retirement Contributions - 401(a)
-  const [contribution401a, setContribution401a] = useState(21600);
+  // 401(a) is auto-calculated — see useMemo below (after employerMatch, nonElectiveContribution)
 
   // Retirement Contributions - IRAs
   const [traditionalIraContrib, setTraditionalIraContrib] = useState(0);
@@ -331,6 +343,8 @@ const PhysicianFinancialPlanner = () => {
   const [retirementAge, setRetirementAge] = useState(65);
   const [spouseRetirementAge, setSpouseRetirementAge] = useState(65);
   const [retirementTaxRate, setRetirementTaxRate] = useState(22); // Estimated effective tax rate on pre-tax withdrawals in retirement
+  // All projections use REAL (inflation-adjusted) returns — values shown in today's dollars
+  // Inflation is baked into lower return rates rather than inflating income/spending separately
 
   // ── localStorage auto-save/restore ───────────────────────────────────
   const STORAGE_KEY = 'physician-financial-planner-state';
@@ -355,7 +369,7 @@ const PhysicianFinancialPlanner = () => {
       if (d.preVsRothSplit !== undefined) setPreVsRothSplit(d.preVsRothSplit);
       if (d.yearsOfService !== undefined) setYearsOfService(d.yearsOfService);
       if (d.deferral457bPercentage !== undefined) setDeferral457bPercentage(d.deferral457bPercentage);
-      if (d.contribution401a !== undefined) setContribution401a(d.contribution401a);
+      // contribution401a is now auto-calculated from 415(c) formula
       if (d.traditionalIraContrib !== undefined) setTraditionalIraContrib(d.traditionalIraContrib);
       if (d.rothIraContrib !== undefined) setRothIraContrib(d.rothIraContrib);
       if (d.spouseTraditionalIra !== undefined) setSpouseTraditionalIra(d.spouseTraditionalIra);
@@ -391,6 +405,7 @@ const PhysicianFinancialPlanner = () => {
       if (d.retirementAge !== undefined) setRetirementAge(d.retirementAge);
       if (d.spouseRetirementAge !== undefined) setSpouseRetirementAge(d.spouseRetirementAge);
       if (d.retirementTaxRate !== undefined) setRetirementTaxRate(d.retirementTaxRate);
+      // inflationRate no longer used — real-return model (backward compat: silently ignore)
     } catch (e) {
       console.warn('[PhysicianFinancialPlanner] Failed to restore from localStorage:', e);
     }
@@ -405,7 +420,7 @@ const PhysicianFinancialPlanner = () => {
         const state = {
           includeSpouse, baseSalary, trueUpPayments, filingStatus, spouseIncome,
           useStandardDeduction, itemizedDeduction, deferralPercentage, preVsRothSplit,
-          yearsOfService, deferral457bPercentage, contribution401a, traditionalIraContrib,
+          yearsOfService, deferral457bPercentage, traditionalIraContrib,
           rothIraContrib, spouseTraditionalIra, spouseRothIra, spouseEmployerDeferral,
           spouseEmployerMatch, spousePreTaxSplit, hsaContribution, hsaCoverage,
           balance401k, balance457b, balance401a, balanceTraditionalIra, balanceRothIra,
@@ -423,7 +438,7 @@ const PhysicianFinancialPlanner = () => {
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
   }, [includeSpouse, baseSalary, trueUpPayments, filingStatus, spouseIncome,
     useStandardDeduction, itemizedDeduction, deferralPercentage, preVsRothSplit,
-    yearsOfService, deferral457bPercentage, contribution401a, traditionalIraContrib,
+    yearsOfService, deferral457bPercentage, traditionalIraContrib,
     rothIraContrib, spouseTraditionalIra, spouseRothIra, spouseEmployerDeferral,
     spouseEmployerMatch, spousePreTaxSplit, hsaContribution, hsaCoverage,
     balance401k, balance457b, balance401a, balanceTraditionalIra, balanceRothIra,
@@ -493,9 +508,12 @@ const PhysicianFinancialPlanner = () => {
   }, [iraMax]);
 
   // Calculate blended return
+  // Real (inflation-adjusted) returns: nominal minus ~3% long-term inflation
+  // All projections are in today's dollars — what you see is purchasing power
+  const ASSUMED_INFLATION = 0.03; // 3% — used only to derive real returns from nominal
   const blendedReturn = useMemo(() => {
-    const bondReturn = 0.045;
-    const equityReturn = 0.07;
+    const bondReturn = 0.015;   // 4.5% nominal − 3% inflation = 1.5% real
+    const equityReturn = 0.04;  // 7.0% nominal − 3% inflation = 4.0% real
     return (equityAllocation / 100) * equityReturn + ((100 - equityAllocation) / 100) * bondReturn;
   }, [equityAllocation]);
 
@@ -618,28 +636,27 @@ const PhysicianFinancialPlanner = () => {
   // Employer match calculation (75% of first 4% + 50% of next 2%, on comp capped at 401(a)(17) limit)
   // Match uses the EFFECTIVE deferral rate = actual deferral dollars / matchable compensation
   // When deferrals come only from base salary, the effective rate relative to total comp is lower
+  // Employer match: dollar-for-dollar up to 3% of matchable comp (requires 3% deferral for full match)
   const employerMatch = useMemo(() => {
     const matchableComp = Math.min(totalComp, IRS_COMP_LIMIT);
-    // Effective deferral rate for match purposes: actual dollars deferred / matchable comp
     const effectiveDeferralRate = matchableComp > 0 ? effective401kDeferral / matchableComp : 0;
-    const matchOnFirst4 = Math.min(effectiveDeferralRate, 0.04) * 0.75 * matchableComp;
-    const matchOnNext2 = Math.max(0, Math.min(effectiveDeferralRate - 0.04, 0.02)) * 0.50 * matchableComp;
-    return matchOnFirst4 + matchOnNext2;
+    return Math.min(effectiveDeferralRate, 0.03) * matchableComp;
   }, [effective401kDeferral, totalComp]);
 
-  // Basic contribution (2% of pay, on comp capped at 401(a)(17) limit)
-  const basicContribution = useMemo(() => {
-    return Math.min(totalComp, IRS_COMP_LIMIT) * 0.02;
+  // Non-elective contribution: 3% of comp (employer contributes regardless of your deferral)
+  const nonElectiveContribution = useMemo(() => {
+    return Math.min(totalComp, IRS_COMP_LIMIT) * 0.03;
   }, [totalComp]);
 
-  // Performance-based contribution (on comp capped at 401(a)(17) limit)
-  const performanceContribution = useMemo(() => {
-    let rate = 0;
-    if (yearsOfService < 10) rate = 0.01;
-    else if (yearsOfService < 20) rate = 0.015;
-    else rate = 0.02;
-    return Math.min(totalComp, IRS_COMP_LIMIT) * rate;
-  }, [yearsOfService, totalComp]);
+  // 401(a) CHSMG Plan — auto-calculated per plan rules:
+  // 6% of current earnings (capped at 401(a)(17)), reduced by 415(c) headroom after all 401(k) contributions
+  const contribution401a = useMemo(() => {
+    const cappedComp = Math.min(totalComp, IRS_COMP_LIMIT);
+    const raw401a = cappedComp * 0.06;
+    const used415c = effective401kDeferral + employerMatch + nonElectiveContribution;
+    const available415c = Math.max(0, IRS_415C_LIMIT - used415c);
+    return Math.max(0, Math.min(raw401a, available415c));
+  }, [totalComp, effective401kDeferral, employerMatch, nonElectiveContribution]);
 
   // Total annual retirement contributions
   const annualContributions = useMemo(() => {
@@ -673,8 +690,7 @@ const PhysicianFinancialPlanner = () => {
       pre401k,
       roth401k,
       match: employerMatch,
-      basic: basicContribution,
-      performance: performanceContribution,
+      nonElective: nonElectiveContribution,
       total457b: effective457bDeferral,
       total401a: contribution401a,
       tradIra: traditionalIraContrib,
@@ -688,7 +704,7 @@ const PhysicianFinancialPlanner = () => {
       taxDeductible,                  // reduces AGI
       totalEmployeeContributions,     // reduces take-home cash
     };
-  }, [effective401kDeferral, preVsRothSplit, employerMatch, basicContribution, performanceContribution, effective457bDeferral, contribution401a, traditionalIraContrib, rothIraContrib, effSpouseTradIra, effSpouseRothIra, hsaContribution, includeSpouse, effSpouseEmployerDeferral, effSpouseEmployerMatch, spousePreTaxSplit]);
+  }, [effective401kDeferral, preVsRothSplit, employerMatch, nonElectiveContribution, effective457bDeferral, contribution401a, traditionalIraContrib, rothIraContrib, effSpouseTradIra, effSpouseRothIra, hsaContribution, includeSpouse, effSpouseEmployerDeferral, effSpouseEmployerMatch, spousePreTaxSplit]);
 
   // Tax calculation with all contributions
   const taxCalculations = useMemo(() => {
@@ -762,6 +778,14 @@ const PhysicianFinancialPlanner = () => {
     return Math.max(0, savings);
   }, [totalComp, effSpouseIncome, includeSpouse, taxCalculations, annualContributions, monthlySpending, studentLoanPayment, mortgagePayment, otherDebtPayment]);
 
+  // Auto-clamp taxable investment when surplus shrinks below current slider value
+  useEffect(() => {
+    const maxMonthly = Math.max(0, Math.floor(annualSavings / 12 / 100) * 100);
+    if (monthlyTaxableInvestment > maxMonthly) {
+      setMonthlyTaxableInvestment(maxMonthly);
+    }
+  }, [annualSavings]);
+
   // Net worth projection
   const netWorthProjection = useMemo(() => {
     const data = [];
@@ -808,27 +832,30 @@ const PhysicianFinancialPlanner = () => {
       const taxDrag = 0.01;
       taxable *= (1 + blendedReturn - taxDrag);
       // Cash savings: emergency reserve earning HYSA rate, no additional contributions modeled
-      savings *= 1.03; // ~3% HYSA return, grows in all phases but drawn last
+      savings *= 1.00; // HYSA ~3% nominal ≈ 0% real return (matches inflation)
 
       const spouseIsRetired = age >= effSpouseRetirementAge;
 
       if (!isRetired) {
         // Accumulation phase with year-by-year cash flow modeling
-        // Step 1: Determine this year's income based on who's still working
+        // Step 1: Determine this year's income (flat — real-dollar model, today's purchasing power)
         const yearPhysicianIncome = totalComp;
         const yearSpouseIncome = spouseIsRetired ? 0 : effSpouseIncome;
         const yearGrossIncome = yearPhysicianIncome + yearSpouseIncome;
 
-        // Step 2: Planned contributions (spouse contributions stop when spouse retires)
+        // Step 2: Planned contributions (all at current-year values — no inflation scaling)
         const yearSpouseTradIra = spouseIsRetired ? 0 : annualContributions.spouseTradIra;
         const yearSpouseRothIra = spouseIsRetired ? 0 : annualContributions.spouseRothIra;
         const yearSpouseEmpPreTax = spouseIsRetired ? 0 : annualContributions.spouseEmpPreTax;
         const yearSpouseEmpRoth = spouseIsRetired ? 0 : annualContributions.spouseEmpRoth;
         const yearSpouseEmpDeferral = yearSpouseEmpPreTax + yearSpouseEmpRoth;
         const yearSpouseEmpMatch = spouseIsRetired ? 0 : annualContributions.spouseEmpMatch;
-        const plannedPreTaxDeductible = annualContributions.pre401k + annualContributions.total457b + annualContributions.total401a + annualContributions.hsa + yearSpouseEmpPreTax;
-        const plannedEmployeeContrib = annualContributions.pre401k + annualContributions.roth401k + annualContributions.total457b + annualContributions.total401a + annualContributions.tradIra + annualContributions.rothIra + yearSpouseTradIra + yearSpouseRothIra + annualContributions.hsa + yearSpouseEmpDeferral;
-        const employerContrib = annualContributions.match + annualContributions.basic + annualContributions.performance;
+
+        // Employer contributions at current-year values (flat comp, flat IRS limits)
+        const employerContrib = employerMatch + nonElectiveContribution;
+
+        const plannedPreTaxDeductible = annualContributions.pre401k + annualContributions.total457b + contribution401a + annualContributions.hsa + yearSpouseEmpPreTax;
+        const plannedEmployeeContrib = annualContributions.pre401k + annualContributions.roth401k + annualContributions.total457b + contribution401a + annualContributions.tradIra + annualContributions.rothIra + yearSpouseTradIra + yearSpouseRothIra + annualContributions.hsa + yearSpouseEmpDeferral;
 
         // Step 3: Compute taxes WITHOUT pre-tax deductions first to get true baseline take-home
         const yearFica = calculateFicaTax(yearPhysicianIncome, yearSpouseIncome, filingStatus);
@@ -842,6 +869,7 @@ const PhysicianFinancialPlanner = () => {
         const baselineTotalTax = baselineFederalTax + yearFica + baselineNcTax + baselineNiit;
 
         // Step 4: Check affordability with zero contributions
+        // Real-dollar model: spending flat in today's dollars
         const yearSpending = monthlySpending * 12;
         const yearDebtPayments = (sLoan > 0 ? studentLoanPayment * 12 : 0) + (mort > 0 ? mortgagePayment * 12 : 0) + (oDebt > 0 ? otherDebtPayment * 12 : 0);
         const yearMandatoryOutflows = yearSpending + yearDebtPayments;
@@ -898,7 +926,7 @@ const PhysicianFinancialPlanner = () => {
         acc401kPreTax += annualContributions.pre401k * sc + employerContrib; // employer always funds
         acc401kRoth += annualContributions.roth401k * sc;
         acc457b += annualContributions.total457b * sc;
-        acc401a += annualContributions.total401a * sc;
+        acc401a += contribution401a * sc;
         tradIra += (annualContributions.tradIra + yearSpouseTradIra) * sc;
         tradIraBasis += (annualContributions.tradIra + yearSpouseTradIra) * sc;
         rothIra += (annualContributions.rothIra + yearSpouseRothIra) * sc;
@@ -944,13 +972,15 @@ const PhysicianFinancialPlanner = () => {
           }
         }
 
-        // Debt reduction (simplified: interest accrues, payments reduce balance)
-        sLoan = Math.max(0, sLoan * (1 + studentLoanRate / 100) - studentLoanPayment * 12);
-        mort = Math.max(0, mort * (1 + mortgageRate / 100) - mortgagePayment * 12);
-        oDebt = Math.max(0, oDebt * (1 + otherDebtRate / 100) - otherDebtPayment * 12);
+        // Debt reduction — rates are nominal; in real terms, inflation erodes debt
+        // Real debt cost = nominal rate − ~3% inflation
+        const realDebtAdj = ASSUMED_INFLATION;
+        sLoan = Math.max(0, sLoan * (1 + Math.max(0, studentLoanRate / 100 - realDebtAdj)) - studentLoanPayment * 12);
+        mort = Math.max(0, mort * (1 + Math.max(0, mortgageRate / 100 - realDebtAdj)) - mortgagePayment * 12);
+        oDebt = Math.max(0, oDebt * (1 + Math.max(0, otherDebtRate / 100 - realDebtAdj)) - otherDebtPayment * 12);
       } else {
-        // Drawdown phase: annual spending inflated at 3%, plus debt service
-        let remainingDraw = (monthlySpending * 12) * Math.pow(1.03, age - retirementAge);
+        // Drawdown phase: spending flat (real dollars — today's purchasing power)
+        let remainingDraw = monthlySpending * 12;
 
         // Debt service in retirement — payments must come from drawn funds
         const yearDebtService =
@@ -959,10 +989,10 @@ const PhysicianFinancialPlanner = () => {
           (oDebt > 0 ? otherDebtPayment * 12 : 0);
         remainingDraw += yearDebtService;
 
-        // Amortize debts (interest accrues, payments reduce balance)
-        sLoan = Math.max(0, sLoan * (1 + studentLoanRate / 100) - studentLoanPayment * 12);
-        mort = Math.max(0, mort * (1 + mortgageRate / 100) - mortgagePayment * 12);
-        oDebt = Math.max(0, oDebt * (1 + otherDebtRate / 100) - otherDebtPayment * 12);
+        // Amortize debts (real rates = nominal − inflation)
+        sLoan = Math.max(0, sLoan * (1 + Math.max(0, studentLoanRate / 100 - ASSUMED_INFLATION)) - studentLoanPayment * 12);
+        mort = Math.max(0, mort * (1 + Math.max(0, mortgageRate / 100 - ASSUMED_INFLATION)) - mortgagePayment * 12);
+        oDebt = Math.max(0, oDebt * (1 + Math.max(0, otherDebtRate / 100 - ASSUMED_INFLATION)) - otherDebtPayment * 12);
 
         // Draw from accounts in priority order.
         // Key rules:
@@ -1064,7 +1094,7 @@ const PhysicianFinancialPlanner = () => {
     // Attach metadata to the array for easy access
     data.shortfallAge = shortfallAge;
     return data;
-  }, [currentAge, retirementAge, effSpouseRetirementAge, blendedReturn, balance401k, balance457b, balance401a, balanceTraditionalIra, balanceRothIra, balanceHsa, effSpousePreTaxBalance, effSpouseRothBalance, taxableBrokerage, savingsBalance, studentLoanBalance, studentLoanRate, studentLoanPayment, mortgageBalance, mortgageRate, mortgagePayment, otherDebtBalance, otherDebtRate, otherDebtPayment, monthlySpending, annualContributions, monthlyTaxableInvestment, retirementTaxRate, preVsRothSplit, totalComp, effSpouseIncome, effSpouseEmployerTotal, filingStatus, deduction, ncTaxDeduction, calculateFederalTax, calculateFicaTax, calculateNiit, estimateNetInvestmentIncome, includeSpouse]);
+  }, [currentAge, retirementAge, effSpouseRetirementAge, blendedReturn, balance401k, balance457b, balance401a, balanceTraditionalIra, balanceRothIra, balanceHsa, effSpousePreTaxBalance, effSpouseRothBalance, taxableBrokerage, savingsBalance, studentLoanBalance, studentLoanRate, studentLoanPayment, mortgageBalance, mortgageRate, mortgagePayment, otherDebtBalance, otherDebtRate, otherDebtPayment, monthlySpending, annualContributions, monthlyTaxableInvestment, retirementTaxRate, preVsRothSplit, totalComp, effSpouseIncome, effSpouseEmployerTotal, filingStatus, deduction, ncTaxDeduction, calculateFederalTax, calculateFicaTax, calculateNiit, estimateNetInvestmentIncome, includeSpouse, contribution401a, employerMatch, nonElectiveContribution]);
 
   // Retirement metrics
   const retirementMetrics = useMemo(() => {
@@ -1080,7 +1110,7 @@ const PhysicianFinancialPlanner = () => {
     const fvCurrentBalances = (balance401k + balance457b + balance401a + balanceTraditionalIra + balanceRothIra + balanceHsa + effSpousePreTaxBalance + effSpouseRothBalance) * Math.pow(1 + r, yearsToRetire);
 
     // Annual retirement contributions — split primary vs spouse for different timelines
-    const annualPrimaryContrib = annualContributions.pre401k + annualContributions.roth401k + annualContributions.match + annualContributions.basic + annualContributions.performance + annualContributions.total457b + annualContributions.total401a + annualContributions.tradIra + annualContributions.rothIra + annualContributions.hsa;
+    const annualPrimaryContrib = annualContributions.pre401k + annualContributions.roth401k + annualContributions.match + annualContributions.nonElective + annualContributions.total457b + annualContributions.total401a + annualContributions.tradIra + annualContributions.rothIra + annualContributions.hsa;
     const annualSpouseContrib = annualContributions.spouseTradIra + annualContributions.spouseRothIra + annualContributions.spouseEmpPreTax + annualContributions.spouseEmpRoth + annualContributions.spouseEmpMatch;
     const annualRetContrib = annualPrimaryContrib + annualSpouseContrib;
 
@@ -1104,12 +1134,35 @@ const PhysicianFinancialPlanner = () => {
     };
   }, [netWorthProjection, retirementAge, effSpouseRetirementAge, currentAge, balance401k, balance457b, balance401a, balanceTraditionalIra, balanceRothIra, balanceHsa, effSpousePreTaxBalance, effSpouseRothBalance, blendedReturn, annualContributions, effSpouseEmployerTotal, taxCalculations, includeSpouse]);
 
+  // ──────────────────────────── SCENARIO COMPARISON ────────────────────────────
+  const handleSaveScenario = useCallback(() => {
+    setSavedScenario({
+      projection: netWorthProjection.map(d => ({ age: d.age, netWorth: d.netWorth })),
+      metrics: {
+        projectedNetWorth: retirementMetrics.projectedNetWorth,
+        totalAnnualContributions: retirementMetrics.totalAnnualContributions,
+        estimatedTaxSavings: retirementMetrics.estimatedTaxSavings,
+        monthlyRetirementIncome: retirementMetrics.monthlyRetirementIncome,
+      },
+    });
+  }, [netWorthProjection, retirementMetrics]);
+
+  // Merge saved scenario net worth into chart data for overlay
+  const chartData = useMemo(() => {
+    if (!savedScenario) return netWorthProjection;
+    const scenarioMap = new Map(savedScenario.projection.map(d => [d.age, d.netWorth]));
+    return netWorthProjection.map(d => ({
+      ...d,
+      scenarioA: scenarioMap.get(d.age) ?? null,
+    }));
+  }, [netWorthProjection, savedScenario]);
+
   // ──────────────────────────── MONTE CARLO SIMULATION ────────────────────────────
   // Runs N simulations with randomized annual returns drawn from a normal distribution.
   // Uses a seeded PRNG (mulberry32) so results are stable across re-renders with same inputs.
   // Produces percentile bands for net worth at each age plus a success probability.
   const monteCarloData = useMemo(() => {
-    const NUM_SIMS = 300;
+    const NUM_SIMS = 5000;
     const EQUITY_VOL = 0.16;  // Annual equity volatility (~16% historical S&P 500)
     const BOND_VOL = 0.06;    // Annual bond volatility (~6% historical aggregate)
     const eqWeight = equityAllocation / 100;
@@ -1194,7 +1247,7 @@ const PhysicianFinancialPlanner = () => {
         spouseRoth *= (1 + clampedReturn);
         const taxDrag = 0.01;
         taxable *= (1 + clampedReturn - taxDrag);
-        sav *= 1.03;
+        sav *= 1.00; // HYSA ~0% real
 
         const spouseIsRetired = age >= effSpouseRetirementAge;
 
@@ -1210,9 +1263,12 @@ const PhysicianFinancialPlanner = () => {
           const yearSpouseEmpRoth = spouseIsRetired ? 0 : annualContributions.spouseEmpRoth;
           const yearSpouseEmpDeferral = yearSpouseEmpPreTax + yearSpouseEmpRoth;
           const yearSpouseEmpMatch = spouseIsRetired ? 0 : annualContributions.spouseEmpMatch;
-          const plannedPreTaxDeductible = annualContributions.pre401k + annualContributions.total457b + annualContributions.total401a + annualContributions.hsa + yearSpouseEmpPreTax;
-          const plannedEmployeeContrib = annualContributions.pre401k + annualContributions.roth401k + annualContributions.total457b + annualContributions.total401a + annualContributions.tradIra + annualContributions.rothIra + yearSpouseTradIra + yearSpouseRothIra + annualContributions.hsa + yearSpouseEmpDeferral;
-          const employerContrib = annualContributions.match + annualContributions.basic + annualContributions.performance;
+
+          // Employer contributions at current-year flat values
+          const employerContrib = employerMatch + nonElectiveContribution;
+
+          const plannedPreTaxDeductible = annualContributions.pre401k + annualContributions.total457b + contribution401a + annualContributions.hsa + yearSpouseEmpPreTax;
+          const plannedEmployeeContrib = annualContributions.pre401k + annualContributions.roth401k + annualContributions.total457b + contribution401a + annualContributions.tradIra + annualContributions.rothIra + yearSpouseTradIra + yearSpouseRothIra + annualContributions.hsa + yearSpouseEmpDeferral;
 
           const yearFica = calculateFicaTax(yearPhysicianIncome, yearSpouseIncome, filingStatus);
           const mcNii = estimateNetInvestmentIncome(taxable, sav);
@@ -1259,7 +1315,7 @@ const PhysicianFinancialPlanner = () => {
           acc401kPreTax += annualContributions.pre401k * sc + employerContrib;
           acc401kRoth += annualContributions.roth401k * sc;
           acc457b += annualContributions.total457b * sc;
-          acc401a += annualContributions.total401a * sc;
+          acc401a += contribution401a * sc;
           tradIra += (annualContributions.tradIra + yearSpouseTradIra) * sc;
           tradIraBasis += (annualContributions.tradIra + yearSpouseTradIra) * sc;
           rothIra += (annualContributions.rothIra + yearSpouseRothIra) * sc;
@@ -1300,17 +1356,17 @@ const PhysicianFinancialPlanner = () => {
             }
           }
 
-          sLoan = Math.max(0, sLoan * (1 + studentLoanRate / 100) - studentLoanPayment * 12);
-          mort = Math.max(0, mort * (1 + mortgageRate / 100) - mortgagePayment * 12);
-          oDebt = Math.max(0, oDebt * (1 + otherDebtRate / 100) - otherDebtPayment * 12);
+          sLoan = Math.max(0, sLoan * (1 + Math.max(0, studentLoanRate / 100 - ASSUMED_INFLATION)) - studentLoanPayment * 12);
+          mort = Math.max(0, mort * (1 + Math.max(0, mortgageRate / 100 - ASSUMED_INFLATION)) - mortgagePayment * 12);
+          oDebt = Math.max(0, oDebt * (1 + Math.max(0, otherDebtRate / 100 - ASSUMED_INFLATION)) - otherDebtPayment * 12);
         } else {
-          // ─── Drawdown phase ───
-          let remainingDraw = (monthlySpending * 12) * Math.pow(1.03, age - retirementAge);
+          // ─── Drawdown phase (real dollars — flat spending) ───
+          let remainingDraw = monthlySpending * 12;
           const yearDebtService = (sLoan > 0 ? studentLoanPayment * 12 : 0) + (mort > 0 ? mortgagePayment * 12 : 0) + (oDebt > 0 ? otherDebtPayment * 12 : 0);
           remainingDraw += yearDebtService;
-          sLoan = Math.max(0, sLoan * (1 + studentLoanRate / 100) - studentLoanPayment * 12);
-          mort = Math.max(0, mort * (1 + mortgageRate / 100) - mortgagePayment * 12);
-          oDebt = Math.max(0, oDebt * (1 + otherDebtRate / 100) - otherDebtPayment * 12);
+          sLoan = Math.max(0, sLoan * (1 + Math.max(0, studentLoanRate / 100 - ASSUMED_INFLATION)) - studentLoanPayment * 12);
+          mort = Math.max(0, mort * (1 + Math.max(0, mortgageRate / 100 - ASSUMED_INFLATION)) - mortgagePayment * 12);
+          oDebt = Math.max(0, oDebt * (1 + Math.max(0, otherDebtRate / 100 - ASSUMED_INFLATION)) - otherDebtPayment * 12);
 
           const earlyWithdrawal = age < 60;
           const penaltyRate = earlyWithdrawal ? 0.10 : 0;
@@ -1419,7 +1475,7 @@ const PhysicianFinancialPlanner = () => {
     studentLoanBalance, studentLoanRate, studentLoanPayment, mortgageBalance, mortgageRate, mortgagePayment,
     otherDebtBalance, otherDebtRate, otherDebtPayment, monthlySpending, annualContributions,
     monthlyTaxableInvestment, retirementTaxRate, preVsRothSplit, totalComp, effSpouseIncome,
-    filingStatus, deduction, ncTaxDeduction, calculateFederalTax, calculateFicaTax, calculateNiit, estimateNetInvestmentIncome, includeSpouse]);
+    filingStatus, deduction, ncTaxDeduction, calculateFederalTax, calculateFicaTax, calculateNiit, estimateNetInvestmentIncome, includeSpouse, contribution401a, employerMatch, nonElectiveContribution]);
 
   // Format currency
   const formatCurrency = (value) => {
@@ -1448,13 +1504,11 @@ const PhysicianFinancialPlanner = () => {
       // Retirement Contributions - 401(k)
       deferralPercentage,
       preVsRothSplit,
-      yearsOfService,
 
       // Retirement Contributions - 457(b)
       deferral457bPercentage,
 
-      // Retirement Contributions - 401(a)
-      contribution401a,
+      // 401(a) is auto-calculated from 415(c) formula
 
       // Retirement Contributions - IRAs
       traditionalIraContrib,
@@ -1544,7 +1598,7 @@ const PhysicianFinancialPlanner = () => {
 
         if (data.deferral457bPercentage !== undefined) setDeferral457bPercentage(data.deferral457bPercentage);
         else if (data.contribution457b !== undefined) setDeferral457bPercentage(0); // Backward compat
-        if (data.contribution401a !== undefined) setContribution401a(data.contribution401a);
+        // contribution401a is now auto-calculated from 415(c) formula
 
         if (data.traditionalIraContrib !== undefined) setTraditionalIraContrib(data.traditionalIraContrib);
         if (data.rothIraContrib !== undefined) setRothIraContrib(data.rothIraContrib);
@@ -1599,6 +1653,7 @@ const PhysicianFinancialPlanner = () => {
         if (data.retirementAge !== undefined) setRetirementAge(data.retirementAge);
         if (data.spouseRetirementAge !== undefined) setSpouseRetirementAge(data.spouseRetirementAge);
         if (data.retirementTaxRate !== undefined) setRetirementTaxRate(data.retirementTaxRate);
+        // inflationRate no longer used — real-return model (backward compat: silently ignore)
       } catch (error) {
         alert('Error importing file: ' + error.message);
       }
@@ -1680,12 +1735,8 @@ const PhysicianFinancialPlanner = () => {
             <span className="text-sm font-semibold text-blue-700">{formatCurrency(annualContributions.match)}</span>
           </div>
           <div className="flex justify-between border-b border-gray-100 pb-1">
-            <span className="text-sm text-blue-600">401(k) Basic Contribution (2%)</span>
-            <span className="text-sm font-semibold text-blue-700">{formatCurrency(annualContributions.basic)}</span>
-          </div>
-          <div className="flex justify-between border-b border-gray-100 pb-1">
-            <span className="text-sm text-blue-600">401(k) Performance-based</span>
-            <span className="text-sm font-semibold text-blue-700">{formatCurrency(annualContributions.performance)}</span>
+            <span className="text-sm text-blue-600">401(k) Non-Elective (3%)</span>
+            <span className="text-sm font-semibold text-blue-700">{formatCurrency(annualContributions.nonElective)}</span>
           </div>
           <div className="flex justify-between border-b border-gray-100 pb-1">
             <span className="text-sm text-gray-600">457(b) ADVANTAGE</span>
@@ -1896,35 +1947,34 @@ const PhysicianFinancialPlanner = () => {
             <p className="text-xs text-gray-500 mt-1">Pre-tax: {formatCurrency((effective401kDeferral * preVsRothSplit) / 100)} | Roth: {formatCurrency((effective401kDeferral * (100 - preVsRothSplit)) / 100)}</p>
           </div>
 
-          <div className="bg-blue-50 border border-blue-200 rounded p-4 mt-4">
-            <p className="text-sm text-blue-900 font-semibold">Employer Match (Automatic)</p>
-            <p className="text-xs text-blue-700 mt-1">75% of first 4% + 50% of next 2% of pay</p>
+          <div className={`${(() => { const matchableComp = Math.min(totalComp, IRS_COMP_LIMIT); const effRate = matchableComp > 0 ? effective401kDeferral / matchableComp : 0; return effRate < 0.03; })() ? 'bg-red-50 border border-red-300' : 'bg-blue-50 border border-blue-200'} rounded p-4 mt-4`}>
+            <p className={`text-sm font-semibold ${(() => { const matchableComp = Math.min(totalComp, IRS_COMP_LIMIT); const effRate = matchableComp > 0 ? effective401kDeferral / matchableComp : 0; return effRate < 0.03; })() ? 'text-red-900' : 'text-blue-900'}`}>Employer Match (Dollar-for-Dollar up to 3%)</p>
+            <p className="text-xs text-blue-700 mt-1">Matches your 401(k) deferrals 1:1 up to 3% of matchable comp</p>
             <p className="text-sm font-bold text-blue-900 mt-2">{formatCurrency(employerMatch)} annually</p>
-            <p className="text-xs text-blue-700 mt-1">You must defer at least 6% to receive full match</p>
+            {(() => {
+              const matchableComp = Math.min(totalComp, IRS_COMP_LIMIT);
+              const effRate = matchableComp > 0 ? effective401kDeferral / matchableComp : 0;
+              if (effRate >= 0.03) {
+                return <p className="text-xs text-green-700 mt-1 font-medium">Full match captured at 3%+ effective deferral rate</p>;
+              }
+              const fullMatch = matchableComp * 0.03;
+              const leftOnTable = fullMatch - employerMatch;
+              const yearsToRetire = Math.max(0, retirementAge - currentAge);
+              const r = blendedReturn > 0 ? blendedReturn : 0.07;
+              const fvLeftOnTable = leftOnTable * ((Math.pow(1 + r, yearsToRetire) - 1) / r);
+              return (
+                <div className="mt-2 bg-red-100 border border-red-200 rounded p-2">
+                  <p className="text-xs text-red-800 font-bold">You're leaving {formatCurrency(leftOnTable)}/yr of free employer match on the table</p>
+                  <p className="text-xs text-red-700 mt-1">Your effective deferral rate is {(effRate * 100).toFixed(1)}% of matchable comp — you need 3% for the full match. Over {yearsToRetire} years, the uncaptured match could grow to ~{formatCurrency(fvLeftOnTable)}.</p>
+                </div>
+              );
+            })()}
           </div>
 
           <div className="bg-gray-50 border border-gray-200 rounded p-4">
-            <p className="text-sm text-gray-900 font-semibold">Basic Contribution (Automatic)</p>
-            <p className="text-xs text-gray-700 mt-1">2% of pay, vests after 3 years</p>
-            <p className="text-sm font-bold text-gray-900 mt-2">{formatCurrency(basicContribution)} annually</p>
-          </div>
-
-          <div>
-            <div className="flex items-center space-x-2 mb-2">
-              <label className="block text-sm font-medium text-gray-700">Years of Service</label>
-              <InfoTip text="Your years of service determine the performance-based employer contribution rate: less than 10 years = 1% of pay, 10-19 years = 1.5%, 20+ years = 2%. This contribution is based on system performance targets being met." />
-            </div>
-            <NumericInput value={yearsOfService} onChange={setYearsOfService} min="0" />
-          </div>
-
-          <div className="bg-green-50 border border-green-200 rounded p-4">
-            <p className="text-sm text-green-900 font-semibold">Performance-based Contribution</p>
-            <p className="text-xs text-green-700 mt-1">
-              {yearsOfService < 10 && '< 10 years: 1% of pay'}
-              {yearsOfService >= 10 && yearsOfService < 20 && '10-19 years: 1.5% of pay'}
-              {yearsOfService >= 20 && '20+ years: 2% of pay'}
-            </p>
-            <p className="text-sm font-bold text-green-900 mt-2">{formatCurrency(performanceContribution)} annually</p>
+            <p className="text-sm text-gray-900 font-semibold">Non-Elective Contribution (Automatic)</p>
+            <p className="text-xs text-gray-700 mt-1">3% of pay — employer contributes regardless of your deferral</p>
+            <p className="text-sm font-bold text-gray-900 mt-2">{formatCurrency(nonElectiveContribution)} annually</p>
           </div>
         </div>
       </div>
@@ -1955,16 +2005,22 @@ const PhysicianFinancialPlanner = () => {
         </div>
       </div>
 
-      {/* 401(a) Employer Plan Section */}
+      {/* 401(a) CHSMG Plan Section */}
       <div className="bg-white border border-gray-200 rounded-lg p-6">
-        <h3 className="text-lg font-bold text-gray-800 mb-4">401(a) Employer Plan</h3>
+        <h3 className="text-lg font-bold text-gray-800 mb-4">401(a) CHSMG Plan</h3>
         <div className="space-y-4">
           <div>
             <div className="flex items-center space-x-2 mb-2">
-              <label className="block text-sm font-medium text-gray-700">Annual Contribution</label>
-              <InfoTip text="The 401(a) contribution is NOT free money — it is deducted from your true-up (incentive) payments. For eligible physicians (prior-year earnings above ~$270k), the contribution is 6% of prior-year earnings, offset against the combined 415(c) annual additions limit ($72,000 for 2026) minus your 401(k) employee + employer contributions. The contribution is automatic and mandatory if your income qualifies — you cannot opt out. Enter your specific amount here." />
+              <label className="block text-sm font-medium text-gray-700">Annual Contribution (Auto-Calculated)</label>
+              <InfoTip text="The 401(a) CHSMG Plan contribution is automatically calculated: 6% of earnings (capped at the $360,000 comp limit), reduced by the 415(c) annual additions limit ($72,000 for 2026) minus all 401(k) contributions (your deferrals + match + non-elective). This contribution is deducted from your true-up/incentive payments. It is mandatory and cannot be opted out of if you meet the eligibility threshold ($270k prior-year earnings). As you increase your 401(k) deferral, the 401(a) contribution decreases to stay within the 415(c) limit." />
             </div>
-            <NumericInput value={contribution401a} onChange={setContribution401a} prefix="$" />
+            <div className="bg-amber-50 border border-amber-200 rounded p-3">
+              <p className="text-lg font-bold text-amber-900">{formatCurrency(contribution401a)}/yr</p>
+              <p className="text-xs text-amber-700 mt-1">
+                = min(6% × {formatCurrency(Math.min(totalComp, IRS_COMP_LIMIT))}, {formatCurrency(IRS_415C_LIMIT)} − {formatCurrency(effective401kDeferral)} deferral − {formatCurrency(employerMatch)} match − {formatCurrency(nonElectiveContribution)} non-elective)
+              </p>
+              <p className="text-xs text-amber-600 mt-1">Deducted from your true-up/incentive payments — not additional take-home pay</p>
+            </div>
             {contribution401a > 0 && (
               <p className="text-xs text-green-700 mt-2 font-medium">Pre-tax savings: ${taxCalculations.taxSavingsPer100.toFixed(2)} per $100 contributed (federal {taxCalculations.fedSavingsPer100.toFixed(0)}% + NC 3.99%{taxCalculations.niitSavingsPer100 > 0 ? ' + NIIT 3.8%' : ''})</p>
             )}
@@ -1999,7 +2055,7 @@ const PhysicianFinancialPlanner = () => {
               type="range"
               min="0"
               max={hsaCoverage === 'family' ? (currentAge >= 55 ? IRS_HSA_FAMILY + IRS_HSA_CATCHUP : IRS_HSA_FAMILY) : (currentAge >= 55 ? IRS_HSA_SELF + IRS_HSA_CATCHUP : IRS_HSA_SELF)}
-              step="100"
+              step="50"
               value={hsaContribution}
               onChange={(e) => setHsaContribution(Number(e.target.value))}
               className="w-full"
@@ -2096,14 +2152,14 @@ const PhysicianFinancialPlanner = () => {
 
             {/* Spouse Employer Plan */}
             <div>
-              <h4 className="text-sm font-semibold text-gray-700 mb-3">Spouse Employer Plan (401k/403b/etc.)</h4>
+              <h4 className="text-sm font-semibold text-gray-700 mb-3">Spouse Employer Plan (401k/403b/457b)</h4>
               <div className="space-y-3">
                 <div>
                   <div className="flex items-center space-x-2 mb-1">
                     <label className="block text-sm font-medium text-gray-700">Employee Deferrals: {formatCurrency(spouseEmployerDeferral)}/yr</label>
-                    <InfoTip text="Spouse's own annual deferrals into their employer retirement plan (401k, 403b, etc.). This comes out of the spouse's paycheck. The 2026 IRS limit is $24,500 ($32,500 if age 50+). These deferrals stop when spouse retires." />
+                    <InfoTip text="Spouse's own annual deferrals into their employer retirement plan. If spouse has access to BOTH a 401(k)/403(b) AND a 457(b), combine both deferrals here — each has its own $24,500 limit ($49,000 combined). The 457(b) has a separate IRS limit from the 401(k)/403(b). If spouse only has one plan, use the single-plan limit. Catch-up: add $8,000/plan if age 50+ ($65,000 combined), or $11,250/plan if age 60-63. These deferrals stop when spouse retires." />
                   </div>
-                  <input type="range" min="0" max="35750" step="500" value={spouseEmployerDeferral} onChange={(e) => setSpouseEmployerDeferral(Number(e.target.value))} className="w-full" />
+                  <input type="range" min="0" max="65000" step="500" value={spouseEmployerDeferral} onChange={(e) => setSpouseEmployerDeferral(Number(e.target.value))} className="w-full" />
                 </div>
                 <div>
                   <div className="flex items-center space-x-2 mb-1">
@@ -2157,18 +2213,34 @@ const PhysicianFinancialPlanner = () => {
           <div>
             <div className="flex items-center space-x-2 mb-2">
               <label className="block text-sm font-medium text-gray-700">Monthly Investment: {formatCurrency(monthlyTaxableInvestment)}</label>
-              <InfoTip text="Amount you explicitly invest each month into taxable brokerage accounts (e.g., Vanguard, Fidelity, Schwab). Only this amount grows in the net worth projection — any unallocated cash beyond this is assumed spent on lifestyle. Taxable accounts grow slightly slower than tax-advantaged accounts due to annual tax drag from dividends and capital gains distributions." />
+              <InfoTip text="Amount you explicitly invest each month into taxable brokerage accounts (e.g., Vanguard, Fidelity, Schwab). Only this amount grows in the net worth projection — any unallocated cash beyond this is assumed spent on lifestyle. This slider is capped at your available monthly surplus after taxes, retirement contributions, spending, and debt payments." />
             </div>
-            <input
-              type="range"
-              min="0"
-              max="10000"
-              step="100"
-              value={monthlyTaxableInvestment}
-              onChange={(e) => setMonthlyTaxableInvestment(Number(e.target.value))}
-              className="w-full"
-            />
-            <p className="text-xs text-gray-500 mt-1">Annual: {formatCurrency(monthlyTaxableInvestment * 12)} | Remaining unallocated: {formatCurrency(annualSavings - monthlyTaxableInvestment * 12)}</p>
+            {(() => {
+              const maxMonthly = Math.max(0, Math.floor(annualSavings / 12 / 100) * 100);
+              const sliderMax = Math.max(maxMonthly, 100); // Minimum slider range of $100
+              const atCap = monthlyTaxableInvestment >= maxMonthly && maxMonthly > 0;
+              const overCap = monthlyTaxableInvestment > maxMonthly;
+              return (
+                <>
+                  <input
+                    type="range"
+                    min="0"
+                    max={sliderMax}
+                    step="100"
+                    value={Math.min(monthlyTaxableInvestment, sliderMax)}
+                    onChange={(e) => setMonthlyTaxableInvestment(Number(e.target.value))}
+                    className="w-full"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">Annual: {formatCurrency(monthlyTaxableInvestment * 12)} | Remaining unallocated: {formatCurrency(Math.max(0, annualSavings - monthlyTaxableInvestment * 12))}/yr</p>
+                  {overCap && (
+                    <p className="text-xs text-amber-600 mt-1 font-medium">Slider adjusted — your available surplus is {formatCurrency(maxMonthly)}/mo after taxes, retirement, spending, and debt.</p>
+                  )}
+                  {atCap && !overCap && (
+                    <p className="text-xs text-blue-600 mt-1 font-medium">You're investing your full available surplus. Any additional cash flow goes to lifestyle.</p>
+                  )}
+                </>
+              );
+            })()}
           </div>
         </div>
       </div>
@@ -2320,19 +2392,20 @@ const PhysicianFinancialPlanner = () => {
               <div className="bg-gray-50 border border-gray-200 rounded p-3">
                 <p className="text-xs text-gray-600">Bonds</p>
                 <p className="text-sm font-bold text-gray-900">{100 - equityAllocation}%</p>
-                <p className="text-xs text-gray-600">@ 4.5%</p>
+                <p className="text-xs text-gray-600">1.5% real <span className="text-gray-400">(4.5% nominal)</span></p>
               </div>
               <div className="bg-blue-50 border border-blue-200 rounded p-3">
                 <p className="text-xs text-blue-600">Equities</p>
                 <p className="text-sm font-bold text-blue-900">{equityAllocation}%</p>
-                <p className="text-xs text-blue-600">@ 7%</p>
+                <p className="text-xs text-blue-600">4.0% real <span className="text-blue-400">(7% nominal)</span></p>
               </div>
               <div className="bg-green-50 border border-green-200 rounded p-3">
-                <p className="text-xs text-green-600">Blended</p>
+                <p className="text-xs text-green-600">Blended Real Return</p>
                 <p className="text-sm font-bold text-green-900">{(blendedReturn * 100).toFixed(2)}%</p>
-                <p className="text-xs text-green-600">avg return</p>
+                <p className="text-xs text-green-600">after 3% inflation</p>
               </div>
             </div>
+            <p className="text-xs text-gray-500 mt-3">Returns are shown after subtracting 3% assumed inflation. A 4% real equity return is equivalent to the historical ~7% nominal return in today's purchasing power. This means every dollar shown in the projections represents what that dollar buys today.</p>
           </div>
         </div>
       </div>
@@ -2364,6 +2437,17 @@ const PhysicianFinancialPlanner = () => {
         </div>
       </div>
 
+      {/* Real-Dollar Model Explainer */}
+      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+        <div className="flex items-start space-x-2">
+          <span className="text-blue-600 text-lg leading-none mt-0.5">ℹ</span>
+          <div>
+            <p className="text-sm font-semibold text-blue-900">Projections in Today's Dollars</p>
+            <p className="text-xs text-blue-800 mt-1">This model uses <strong>real (inflation-adjusted) returns</strong> so every dollar shown represents today's purchasing power. Investment returns appear lower than typical headlines (e.g., 4% equities vs. 7% nominal) because 3% annual inflation has already been subtracted. The benefit: if the chart shows $3M at retirement, that's $3M of what $3M buys <em>right now</em> — no need to guess what future dollars will actually be worth.</p>
+          </div>
+        </div>
+      </div>
+
       {/* Personal Settings */}
       <div className="bg-white border border-gray-200 rounded-lg p-6">
         <h3 className="text-lg font-bold text-gray-800 mb-4">Personal Settings</h3>
@@ -2385,10 +2469,6 @@ const PhysicianFinancialPlanner = () => {
             </div>
           )}
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Years of Service</label>
-            <NumericInput value={yearsOfService} onChange={setYearsOfService} min="0" />
-          </div>
         </div>
       </div>
 
@@ -2774,7 +2854,7 @@ const PhysicianFinancialPlanner = () => {
             const bridgeYears = annualSpend > 0 ? (bridge457b / annualSpend).toFixed(1) : '—';
             return (
               <p className="text-sm text-emerald-700 mt-2 font-medium">
-                At retirement (age {retirementAge}), your projected 457(b) balance of {formatCurrency(bridge457b)} covers approximately <strong>{bridgeYears} years</strong> of current annual spending before needing to touch penalized accounts.
+                At retirement (age {retirementAge}), your projected 457(b) balance of {formatCurrency(bridge457b)} covers approximately <strong>{bridgeYears} years</strong> of annual spending (in today's dollars) before needing to touch penalized accounts.
               </p>
             );
           })()}
@@ -2930,8 +3010,6 @@ const PhysicianFinancialPlanner = () => {
       </div>
     );
 
-    const perfRate = yearsOfService < 10 ? '1%' : yearsOfService < 20 ? '1.5%' : '2%';
-
     return (
       <div className="space-y-2">
         <p className="text-xs text-gray-500 mb-4">
@@ -2971,25 +3049,34 @@ const PhysicianFinancialPlanner = () => {
               <Row label="Retirement Withdrawal Tax Rate" value={`${retirementTaxRate}%`} note="User-set effective rate on pre-tax draws" />
             </Section>
 
-            <Section title="Employer Contributions">
-              <Row label="Match Formula" value="75% first 4% + 50% next 2%" note="On comp up to §401(a)(17) limit" />
+            <Section title="Employer Contributions (401(k))">
+              <Row label="Match Formula" value="Dollar-for-dollar up to 3%" note="On comp up to §401(a)(17) limit" />
               <Row label="Match Comp Base" value={formatCurrency(Math.min(totalComp, IRS_COMP_LIMIT))} note={totalComp > IRS_COMP_LIMIT ? `Capped from ${formatCurrency(totalComp)}` : 'Full comp used'} />
               <Row label="Calculated Match" value={formatCurrency(employerMatch)} />
-              <Row label="Basic Contribution" value={`2% = ${formatCurrency(basicContribution)}`} note="Automatic, no deferral required" />
-              <Row label="Performance Contribution" value={`${perfRate} = ${formatCurrency(performanceContribution)}`} note={`Based on ${yearsOfService} years of service`} />
-              <Row label="Total Employer" value={formatCurrency(employerMatch + basicContribution + performanceContribution)} note="Match + Basic + Performance" />
+              <Row label="Non-Elective Contribution" value={`3% = ${formatCurrency(nonElectiveContribution)}`} note="Automatic, regardless of deferral" />
+              <Row label="Total 401(k) Employer" value={formatCurrency(employerMatch + nonElectiveContribution)} note="Match + Non-Elective" />
+            </Section>
+
+            <Section title="401(a) CHSMG Plan">
+              <Row label="Raw Contribution" value={`6% of ${formatCurrency(Math.min(totalComp, IRS_COMP_LIMIT))} = ${formatCurrency(Math.min(totalComp, IRS_COMP_LIMIT) * 0.06)}`} />
+              <Row label="415(c) Used" value={formatCurrency(effective401kDeferral + employerMatch + nonElectiveContribution)} note="Deferral + Match + Non-Elective" />
+              <Row label="415(c) Remaining" value={formatCurrency(Math.max(0, IRS_415C_LIMIT - effective401kDeferral - employerMatch - nonElectiveContribution))} />
+              <Row label="Actual 401(a)" value={formatCurrency(contribution401a)} note="min(6% cap, 415(c) remaining)" />
             </Section>
           </div>
 
           {/* ── Right Column ── */}
           <div>
             <Section title="Investment Return Assumptions">
-              <Row label="Equity Return" value="7.0% nominal" note="Long-term US equity average" />
-              <Row label="Bond Return" value="4.5% nominal" note="Investment-grade bond assumption" />
+              <Row label="Model Type" value="Real (today's dollars)" note="All values shown in current purchasing power" />
+              <Row label="Assumed Inflation" value="3.0%" note="Subtracted from nominal returns; not shown separately" />
+              <Row label="Equity Real Return" value="4.0%" note="7.0% nominal − 3.0% inflation" />
+              <Row label="Bond Real Return" value="1.5%" note="4.5% nominal − 3.0% inflation" />
               <Row label="Your Equity Allocation" value={`${equityAllocation}%`} note="User-adjustable" />
-              <Row label="Blended Return" value={`${(blendedReturn * 100).toFixed(2)}%`} note={`${equityAllocation}% × 7% + ${100 - equityAllocation}% × 4.5%`} />
+              <Row label="Blended Real Return" value={`${(blendedReturn * 100).toFixed(2)}%`} note={`${equityAllocation}% × 4% + ${100 - equityAllocation}% × 1.5%`} />
               <Row label="Taxable Account Drag" value="1.0% / year" note="Dividends, cap gains, turnover" />
-              <Row label="Cash Savings (HYSA)" value="3.0% / year" note="No additional contributions modeled" />
+              <Row label="Cash Savings (HYSA)" value="~0% real" note="3% nominal ≈ inflation; preserves purchasing power only" />
+              <Row label="Debt Interest" value="Real rate" note="Nominal rate minus 3% inflation (debt erodes faster in real terms)" />
             </Section>
 
             <Section title="Monte Carlo Simulation">
@@ -3005,7 +3092,7 @@ const PhysicianFinancialPlanner = () => {
             </Section>
 
             <Section title="Retirement & Drawdown">
-              <Row label="Retirement Spending Inflation" value="3.0% / year" note="Applied from retirement age forward" />
+              <Row label="Retirement Spending" value="Flat (real dollars)" note="$1 today = $1 at retirement in purchasing power" />
               <Row label="Retirement Debt Service" value="Funded from draws" note="Debt payments added to annual draw amount" />
               <Row label="Early Withdrawal Penalty" value="10%" note="401(k), 401(a), Trad IRA before age 59½" />
               <Row label="457(b) Penalty" value="$0" note="Exempt after separation from employer" />
@@ -3113,25 +3200,29 @@ const PhysicianFinancialPlanner = () => {
           {/* Key Metrics */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 mb-2">
             <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
-              <p className="text-xs text-blue-600 font-semibold">Net Worth at Retirement</p>
+              <p className="text-xs text-blue-600 font-semibold">Net Worth at Retirement <span className="font-normal">(today's $)</span></p>
               <p className="text-base font-bold text-blue-900">{formatCurrency(retirementMetrics.projectedNetWorth || 0)}</p>
+              {savedScenario && (() => { const d = (retirementMetrics.projectedNetWorth || 0) - savedScenario.metrics.projectedNetWorth; return d !== 0 ? <p className={`text-xs font-semibold ${d > 0 ? 'text-green-700' : 'text-red-700'}`}>{d > 0 ? '+' : ''}{formatCurrency(d)} vs A</p> : null; })()}
             </div>
             <div className="bg-green-50 border border-green-200 rounded-lg px-3 py-2">
               <p className="text-xs text-green-600 font-semibold">Annual Contributions</p>
               <p className="text-base font-bold text-green-900">{formatCurrency(retirementMetrics.totalAnnualContributions || 0)}</p>
+              {savedScenario && (() => { const d = (retirementMetrics.totalAnnualContributions || 0) - savedScenario.metrics.totalAnnualContributions; return d !== 0 ? <p className={`text-xs font-semibold ${d > 0 ? 'text-green-700' : 'text-red-700'}`}>{d > 0 ? '+' : ''}{formatCurrency(d)} vs A</p> : null; })()}
             </div>
             <div className="bg-purple-50 border border-purple-200 rounded-lg px-3 py-2">
               <p className="text-xs text-purple-600 font-semibold">Annual Tax Savings</p>
               <p className="text-base font-bold text-purple-900">{formatCurrency(retirementMetrics.estimatedTaxSavings || 0)}</p>
+              {savedScenario && (() => { const d = (retirementMetrics.estimatedTaxSavings || 0) - savedScenario.metrics.estimatedTaxSavings; return d !== 0 ? <p className={`text-xs font-semibold ${d > 0 ? 'text-green-700' : 'text-red-700'}`}>{d > 0 ? '+' : ''}{formatCurrency(d)} vs A</p> : null; })()}
             </div>
             <div className="bg-orange-50 border border-orange-200 rounded-lg px-3 py-2">
-              <p className="text-xs text-orange-600 font-semibold">Monthly Retirement Income</p>
+              <p className="text-xs text-orange-600 font-semibold">Monthly Retirement Income <span className="font-normal">(today's $)</span></p>
               <p className="text-base font-bold text-orange-900">{formatCurrency(retirementMetrics.monthlyRetirementIncome || 0)}</p>
+              {savedScenario && (() => { const d = (retirementMetrics.monthlyRetirementIncome || 0) - savedScenario.metrics.monthlyRetirementIncome; return d !== 0 ? <p className={`text-xs font-semibold ${d > 0 ? 'text-green-700' : 'text-red-700'}`}>{d > 0 ? '+' : ''}{formatCurrency(d)} vs A</p> : null; })()}
             </div>
           </div>
 
           {/* Net Worth Chart */}
-          <div className="bg-white border border-gray-200 rounded-lg p-3 shadow-lg">
+          <div className={chartFullscreen ? '' : 'bg-white border border-gray-200 rounded-lg p-3 shadow-lg'} style={chartFullscreen ? { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 9999, backgroundColor: '#fff', padding: '16px 24px', display: 'flex', flexDirection: 'column', overflow: 'auto' } : {}}>
             {netWorthProjection.shortfallAge && (
               <div className="bg-red-100 border border-red-300 rounded px-3 py-1.5 mb-1 flex items-center justify-between">
                 <span className="text-xs font-bold text-red-800">
@@ -3140,10 +3231,35 @@ const PhysicianFinancialPlanner = () => {
               </div>
             )}
             <div className="flex items-center justify-between mb-1">
-              <h3 className="text-sm font-bold text-gray-800">
-                {showMonteCarlo ? 'Monte Carlo Simulation — Net Worth Percentile Bands' : detailedChart ? 'Account Breakdown & Withdrawal Sequence' : 'Net Worth Projection'} (Age {currentAge} to 90)
-              </h3>
+              <div>
+                <h3 className="text-sm font-bold text-gray-800">
+                  {showMonteCarlo ? 'Monte Carlo Simulation — Net Worth Percentile Bands' : detailedChart ? 'Account Breakdown & Withdrawal Sequence' : savedScenario ? 'Net Worth Projection — Comparing to Scenario A' : 'Net Worth Projection'} (Age {currentAge} to 90)
+                </h3>
+                <p className="text-xs text-gray-500">All values in today's dollars — adjusted for 3% annual inflation</p>
+              </div>
               <div className="flex items-center space-x-2">
+                <button
+                  onClick={() => setChartFullscreen((v) => !v)}
+                  className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 py-1 rounded transition font-medium"
+                  title={chartFullscreen ? 'Exit fullscreen (Esc)' : 'Expand chart to fullscreen'}
+                >
+                  {chartFullscreen ? '✕ Exit' : '⛶ Expand'}
+                </button>
+                {savedScenario ? (
+                  <button
+                    onClick={() => setSavedScenario(null)}
+                    style={{ backgroundColor: '#f59e0b', color: '#fff', fontSize: '12px', padding: '4px 8px', borderRadius: '4px', fontWeight: 600, border: 'none', cursor: 'pointer' }}
+                  >
+                    Clear Scenario A
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleSaveScenario}
+                    className="text-xs px-2 py-1 rounded transition font-medium bg-gray-100 hover:bg-gray-200 text-gray-700"
+                  >
+                    Save as Scenario A
+                  </button>
+                )}
                 <button
                   onClick={() => { setShowMonteCarlo((v) => !v); if (!showMonteCarlo) setDetailedChart(false); }}
                   className={`text-xs px-2 py-1 rounded transition font-medium ${showMonteCarlo ? 'bg-indigo-600 text-white' : 'bg-gray-100 hover:bg-gray-200 text-gray-700'}`}
@@ -3160,7 +3276,7 @@ const PhysicianFinancialPlanner = () => {
                 )}
               </div>
             </div>
-            <ResponsiveContainer width="100%" height={showMonteCarlo ? 260 : detailedChart ? 260 : 200}>
+            <ResponsiveContainer width="100%" height={chartFullscreen ? '100%' : (showMonteCarlo ? 260 : detailedChart ? 260 : 200)} style={chartFullscreen ? { flex: 1, minHeight: 0 } : {}}>
               {showMonteCarlo ? (
                 <AreaChart data={monteCarloData.bands} margin={{ top: 5, right: 25, left: 0, bottom: 0 }}>
                   <defs>
@@ -3196,7 +3312,7 @@ const PhysicianFinancialPlanner = () => {
                   <Area type="monotone" dataKey="deterministic" stackId="none" stroke="#0284c7" strokeWidth={1.5} strokeDasharray="6 3" fill="none" name="Fixed Return" />
                 </AreaChart>
               ) : detailedChart ? (
-                <AreaChart data={netWorthProjection} margin={{ top: 5, right: 25, left: 0, bottom: 0 }} stackOffset="none">
+                <AreaChart data={chartData} margin={{ top: 5, right: 25, left: 0, bottom: 0 }} stackOffset="none">
                   <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
                   <XAxis dataKey="age" tick={{ fill: '#6b7280', fontSize: 11 }} />
                   <YAxis
@@ -3218,9 +3334,10 @@ const PhysicianFinancialPlanner = () => {
                   {includeSpouse && <Area type="monotone" dataKey="accSpouseRoth" stackId="1" stroke="#a855f7" fill="#a855f7" fillOpacity={0.5} name="Spouse Roth" />}
                   <Area type="monotone" dataKey="accTaxable" stackId="1" stroke="#ea580c" fill="#ea580c" fillOpacity={0.6} name="Taxable Brokerage" />
                   <Area type="monotone" dataKey="accSavings" stackId="1" stroke="#65a30d" fill="#65a30d" fillOpacity={0.5} name="Cash Savings" />
+                  {savedScenario && <Area type="monotone" dataKey="scenarioA" stackId="none" stroke="#f59e0b" strokeWidth={2} strokeDasharray="6 3" fill="none" fillOpacity={0} name="Scenario A" dot={false} />}
                   </AreaChart>
               ) : (
-                <AreaChart data={netWorthProjection} margin={{ top: 18, right: 25, left: 0, bottom: 0 }}>
+                <AreaChart data={chartData} margin={{ top: 18, right: 25, left: 0, bottom: 0 }}>
                   <defs>
                     <linearGradient id="colorNetWorth" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%" stopColor="#0ea5e9" stopOpacity={0.8} />
@@ -3251,6 +3368,19 @@ const PhysicianFinancialPlanner = () => {
                     fill="url(#colorNetWorth)"
                     name="Total Net Worth"
                   />
+                  {savedScenario && (
+                    <Area
+                      type="monotone"
+                      dataKey="scenarioA"
+                      stroke="#f59e0b"
+                      strokeWidth={2}
+                      strokeDasharray="6 3"
+                      fill="none"
+                      fillOpacity={0}
+                      name="Scenario A"
+                      dot={false}
+                    />
+                  )}
                 </AreaChart>
               )}
             </ResponsiveContainer>
