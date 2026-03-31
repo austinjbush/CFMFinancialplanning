@@ -235,10 +235,8 @@ const StackedTooltip = ({ active, payload, label }) => {
     if (Math.abs(v) >= 1000) return '$' + v.toLocaleString('en-US', { maximumFractionDigits: 0 });
     return '$' + v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   };
-  // Filter out entries whose value rounds to zero
   const visible = payload.filter((entry) => Math.round(entry.value) !== 0);
   if (visible.length === 0) return null;
-  const total = visible.reduce((sum, entry) => sum + entry.value, 0);
   return (
     <div style={{ backgroundColor: '#fff', border: '1px solid #e5e7eb', borderRadius: '0.5rem', fontSize: '11px', padding: '8px 10px' }}>
       <p style={{ fontWeight: 600, marginBottom: 4 }}>{`Age: ${label}`}</p>
@@ -248,12 +246,31 @@ const StackedTooltip = ({ active, payload, label }) => {
           <span style={{ fontWeight: 500 }}>{fmt(entry.value)}</span>
         </div>
       ))}
-      {visible.length > 1 && (
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, borderTop: '1px solid #e5e7eb', marginTop: 4, paddingTop: 4, fontWeight: 700, color: '#111' }}>
-          <span>Total</span>
-          <span>{fmt(total)}</span>
-        </div>
-      )}
+    </div>
+  );
+};
+
+// Monte Carlo tooltip: shows percentile values with spread info
+const MonteCarloTooltip = ({ active, payload, label }) => {
+  if (!active || !payload) return null;
+  const fmt = (v) => '$' + v.toLocaleString('en-US', { maximumFractionDigits: 0 });
+  const getData = (key) => { const e = payload.find(p => p.dataKey === key); return e ? e.value : null; };
+  const p10 = getData('p10');
+  const p25 = getData('p25');
+  const p50 = getData('p50');
+  const p75 = getData('p75');
+  const p90 = getData('p90');
+  const det = getData('deterministic');
+  return (
+    <div style={{ backgroundColor: '#fff', border: '1px solid #e5e7eb', borderRadius: '0.5rem', fontSize: '11px', padding: '8px 10px', minWidth: 180 }}>
+      <p style={{ fontWeight: 600, marginBottom: 6 }}>{`Age: ${label}`}</p>
+      {p90 !== null && <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, color: '#818cf8' }}><span>90th percentile</span><span style={{ fontWeight: 500 }}>{fmt(p90)}</span></div>}
+      {p75 !== null && <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, color: '#6366f1' }}><span>75th percentile</span><span style={{ fontWeight: 500 }}>{fmt(p75)}</span></div>}
+      {p50 !== null && <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, color: '#4f46e5', fontWeight: 600 }}><span>Median (50th)</span><span>{fmt(p50)}</span></div>}
+      {p25 !== null && <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, color: '#6366f1' }}><span>25th percentile</span><span style={{ fontWeight: 500 }}>{fmt(p25)}</span></div>}
+      {p10 !== null && <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, color: '#818cf8' }}><span>10th percentile</span><span style={{ fontWeight: 500 }}>{fmt(p10)}</span></div>}
+      {det !== null && <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, borderTop: '1px solid #e5e7eb', marginTop: 4, paddingTop: 4, color: '#0284c7' }}><span>Fixed return</span><span style={{ fontWeight: 500 }}>{fmt(det)}</span></div>}
+      {p90 !== null && p10 !== null && <div style={{ fontSize: '10px', color: '#9ca3af', marginTop: 4 }}>Range: {fmt(p90 - p10)} spread</div>}
     </div>
   );
 };
@@ -2793,7 +2810,7 @@ const PhysicianFinancialPlanner = () => {
           <h3 className="text-lg font-bold text-gray-900 mb-2">Account Balances by Phase</h3>
           <div style={{ height: 450 }}>
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={netWorthProjection} margin={{ top: 10, right: 25, left: 0, bottom: 0 }} stackOffset="none">
+              <AreaChart data={netWorthProjection} margin={{ top: 22, right: 25, left: 0, bottom: 0 }} stackOffset="none">
                 <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
                 <XAxis dataKey="age" tick={{ fill: '#6b7280', fontSize: 11 }} />
                 <YAxis
@@ -3278,7 +3295,7 @@ const PhysicianFinancialPlanner = () => {
             </div>
             <ResponsiveContainer width="100%" height={chartFullscreen ? '100%' : (showMonteCarlo ? 260 : detailedChart ? 260 : 200)} style={chartFullscreen ? { flex: 1, minHeight: 0 } : {}}>
               {showMonteCarlo ? (
-                <AreaChart data={monteCarloData.bands} margin={{ top: 5, right: 25, left: 0, bottom: 0 }}>
+                <AreaChart data={monteCarloData.bands} margin={{ top: 20, right: 25, left: 0, bottom: 0 }}>
                   <defs>
                     <linearGradient id="mcBand90" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor="#818cf8" stopOpacity={0.15} />
@@ -3296,18 +3313,18 @@ const PhysicianFinancialPlanner = () => {
                     tick={{ fill: '#6b7280', fontSize: 11 }}
                     width={55}
                   />
-                  <Tooltip content={<StackedTooltip />} />
+                  <Tooltip content={<MonteCarloTooltip />} />
                   <Legend wrapperStyle={{ fontSize: '10px' }} />
                   {retirementAge <= 90 && (
-                    <ReferenceLine x={retirementAge} stroke="#dc2626" strokeDasharray="6 3" strokeWidth={1.5} label={{ value: `Retire (${retirementAge})`, position: 'insideTopRight', fontSize: 9, fill: '#dc2626', fontWeight: 600, dy: -5 }} />
+                    <ReferenceLine x={retirementAge} stroke="#dc2626" strokeDasharray="6 3" strokeWidth={1.5} label={{ value: `Retire (${retirementAge})`, position: 'top', fontSize: 9, fill: '#dc2626', fontWeight: 600 }} />
                   )}
                   {/* Fan bands: 10th-90th range, then 25th-75th range */}
-                  <Area type="monotone" dataKey="p90" stackId="none" stroke="none" fill="url(#mcBand90)" fillOpacity={1} name="90th %ile" />
-                  <Area type="monotone" dataKey="p10" stackId="none" stroke="none" fill="#fff" fillOpacity={0} name="10th %ile" legendType="none" />
-                  <Area type="monotone" dataKey="p75" stackId="none" stroke="none" fill="url(#mcBand75)" fillOpacity={1} name="75th %ile" />
-                  <Area type="monotone" dataKey="p25" stackId="none" stroke="none" fill="#fff" fillOpacity={0} name="25th %ile" legendType="none" />
+                  <Area type="monotone" dataKey="p90" stackId="none" stroke="#a5b4fc" strokeWidth={0.5} fill="url(#mcBand90)" fillOpacity={1} name="90th %ile" />
+                  <Area type="monotone" dataKey="p10" stackId="none" stroke="#a5b4fc" strokeWidth={0.5} fill="#fff" fillOpacity={0} name="10th %ile" />
+                  <Area type="monotone" dataKey="p75" stackId="none" stroke="#818cf8" strokeWidth={0.5} fill="url(#mcBand75)" fillOpacity={1} name="75th %ile" />
+                  <Area type="monotone" dataKey="p25" stackId="none" stroke="#818cf8" strokeWidth={0.5} fill="#fff" fillOpacity={0} name="25th %ile" />
                   {/* Median line */}
-                  <Area type="monotone" dataKey="p50" stackId="none" stroke="#4f46e5" strokeWidth={2} fill="none" name="Median (50th)" />
+                  <Area type="monotone" dataKey="p50" stackId="none" stroke="#4f46e5" strokeWidth={2.5} fill="none" name="Median (50th)" />
                   {/* Deterministic baseline */}
                   <Area type="monotone" dataKey="deterministic" stackId="none" stroke="#0284c7" strokeWidth={1.5} strokeDasharray="6 3" fill="none" name="Fixed Return" />
                 </AreaChart>
@@ -3385,11 +3402,27 @@ const PhysicianFinancialPlanner = () => {
               )}
             </ResponsiveContainer>
             {showMonteCarlo && (
-              <div className="flex items-center justify-between mt-1 px-1">
-                <span className="text-xs text-gray-500">{monteCarloData.numSims} simulations · Portfolio vol: {monteCarloData.portfolioVol.toFixed(1)}%</span>
-                <span className={`text-xs font-bold ${monteCarloData.successRate >= 90 ? 'text-green-700' : monteCarloData.successRate >= 75 ? 'text-yellow-700' : 'text-red-700'}`}>
-                  {monteCarloData.successRate.toFixed(0)}% success rate to age 90
-                </span>
+              <div className="mt-1 px-1 space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-gray-500">{monteCarloData.numSims.toLocaleString()} simulations · Portfolio vol: {monteCarloData.portfolioVol.toFixed(1)}% · Real return: {(blendedReturn * 100).toFixed(1)}%</span>
+                  <span className={`text-xs font-bold ${monteCarloData.successRate >= 90 ? 'text-green-700' : monteCarloData.successRate >= 75 ? 'text-yellow-700' : 'text-red-700'}`}>
+                    {monteCarloData.successRate.toFixed(0)}% success rate through age 90
+                  </span>
+                </div>
+                {monteCarloData.medianShortfallAge && (
+                  <div className="text-xs text-red-600">
+                    In failed scenarios, median shortfall age: {monteCarloData.medianShortfallAge} · Worst 10%: age {monteCarloData.p10ShortfallAge}
+                  </div>
+                )}
+                {(() => {
+                  const retireData = monteCarloData.bands.find(d => d.age === retirementAge);
+                  if (!retireData) return null;
+                  return (
+                    <div className="text-xs text-gray-600">
+                      Net worth at retirement (age {retirementAge}): Median {formatCurrency(retireData.p50)} · 25th %ile {formatCurrency(retireData.p25)} · 10th %ile {formatCurrency(retireData.p10)}
+                    </div>
+                  );
+                })()}
               </div>
             )}
           </div>
